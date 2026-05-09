@@ -102,7 +102,7 @@ export default async function handler(req, res) {
       ).substring(0, 250);
 
       rawItems.push({ titulo, link, fecha, autor, imagen, resumen, contenido });
-      if (rawItems.length >= 8) break;
+      if (rawItems.length >= 4) break;
     }
 
     // Buscar og:image solo para los que no tienen imagen, con timeout individual

@@ -1,4 +1,4 @@
-// api/noticias.js — RSS Blasina con imagen extraída del contenido si no está en el feed
+// api/noticias.js — RSS Blasina con fetch de imagen desde cada artículo
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -17,10 +17,9 @@ export default async function handler(req, res) {
 
     const xml = await response.text();
     const EXCLUIR = ["plaza rural", "pantalla uruguay"];
-    const meses = ["enero","febrero","marzo","abril","mayo","junio","julio",
-                   "agosto","septiembre","octubre","noviembre","diciembre"];
 
-    const items = [];
+    // Parsear todos los items primero
+    const rawItems = [];
     const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
 
     for (const match of itemMatches) {
@@ -42,20 +41,17 @@ export default async function handler(req, res) {
       const autor = (x.match(/<dc:creator><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>/) ||
                      x.match(/<author>([\s\S]*?)<\/author>/))?.[1]?.trim() || "Blasina y Asociados";
 
-      // Contenido completo
       const contenido = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || "";
 
-      // Imagen: buscar en media:content, enclosure, o primera img del contenido
+      // Imagen del feed o del contenido
       let imagen = x.match(/<media:content[^>]+url="([^"]+)"/i)?.[1] ||
                    x.match(/<enclosure[^>]+url="([^"]+)"/i)?.[1] || null;
 
       if (!imagen && contenido) {
-        // Buscar primera img que no sea un gif o tracking pixel
         const imgMatches = [...contenido.matchAll(/<img[^>]+src="([^"]+)"/gi)];
         for (const im of imgMatches) {
           const src = im[1];
-          if (!src.includes(".gif") && !src.includes("pixel") && src.includes("wp-content")) {
-            // Preferir la versión -768x o la original, no thumbnails pequeños
+          if (!src.includes(".gif") && src.includes("wp-content/uploads")) {
             imagen = src;
             break;
           }
@@ -66,9 +62,26 @@ export default async function handler(req, res) {
                        x.match(/<description>([\s\S]*?)<\/description>/))?.[1]
                         ?.replace(/<[^>]+>/g, " ")?.replace(/\s+/g, " ")?.trim()?.substring(0, 250) || "";
 
-      items.push({ titulo, link, fecha, autor, imagen, resumen, contenido });
-      if (items.length >= 8) break;
+      rawItems.push({ titulo, link, fecha, autor, imagen, resumen, contenido });
+      if (rawItems.length >= 8) break;
     }
+
+    // Para los que no tienen imagen, buscarla en og:image de la página del artículo
+    const items = await Promise.all(rawItems.map(async (item) => {
+      if (item.imagen) return item;
+      try {
+        const pageRes = await fetch(item.link, {
+          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+        });
+        const pageHtml = await pageRes.text();
+        // og:image es la imagen destacada del artículo
+        const ogImg = pageHtml.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)?.[1] ||
+                      pageHtml.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i)?.[1] || null;
+        return { ...item, imagen: ogImg };
+      } catch (_) {
+        return item;
+      }
+    }));
 
     return res.status(200).json({ ok: true, noticias: items, timestamp: new Date().toISOString() });
 

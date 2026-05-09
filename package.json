@@ -1,9 +1,6 @@
 {
   "name": "lote21-proxy",
   "version": "1.0.0",
-  "description": "Proxy para obtener datos del próximo remate de Lote21",
-  "private": true,
-  "scripts": {
-    "dev": "vercel dev"
-  }
+  "type": "module",
+  "private": true
 }

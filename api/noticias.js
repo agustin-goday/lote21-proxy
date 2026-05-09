@@ -1,4 +1,4 @@
-// api/noticias.js — RSS Blasina y Asociados con imagen, filtrado y formato
+// api/noticias.js — RSS Blasina con imagen extraída del contenido si no está en el feed
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -26,44 +26,45 @@ export default async function handler(req, res) {
     for (const match of itemMatches) {
       const x = match[1];
 
-      // Título
       const titulo = (x.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) ||
                       x.match(/<title>([\s\S]*?)<\/title>/))?.[1]?.trim() || "";
 
-      // Filtrar
       if (EXCLUIR.some(p => titulo.toLowerCase().includes(p))) continue;
 
-      // Link
       const link = x.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ||
                    x.match(/<guid[^>]*>([\s\S]*?)<\/guid>/)?.[1]?.trim() || "";
 
-      // Fecha
       const fechaRaw = x.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() || "";
       const fechaObj = new Date(fechaRaw);
       const fecha = isNaN(fechaObj) ? fechaRaw
         : `${fechaObj.getDate()}-${String(fechaObj.getMonth()+1).padStart(2,"0")}-${fechaObj.getFullYear()}`;
 
-      // Autor
       const autor = (x.match(/<dc:creator><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>/) ||
                      x.match(/<author>([\s\S]*?)<\/author>/))?.[1]?.trim() || "Blasina y Asociados";
 
-      // Imagen — WordPress la pone en media:content, enclosure, o dentro del contenido
+      // Contenido completo
+      const contenido = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || "";
+
+      // Imagen: buscar en media:content, enclosure, o primera img del contenido
       let imagen = x.match(/<media:content[^>]+url="([^"]+)"/i)?.[1] ||
                    x.match(/<enclosure[^>]+url="([^"]+)"/i)?.[1] || null;
 
-      // Si no está en media, buscar la primera img dentro del contenido
-      if (!imagen) {
-        const contenidoRaw = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || "";
-        imagen = contenidoRaw.match(/<img[^>]+src="([^"]+)"/i)?.[1] || null;
+      if (!imagen && contenido) {
+        // Buscar primera img que no sea un gif o tracking pixel
+        const imgMatches = [...contenido.matchAll(/<img[^>]+src="([^"]+)"/gi)];
+        for (const im of imgMatches) {
+          const src = im[1];
+          if (!src.includes(".gif") && !src.includes("pixel") && src.includes("wp-content")) {
+            // Preferir la versión -768x o la original, no thumbnails pequeños
+            imagen = src;
+            break;
+          }
+        }
       }
 
-      // Resumen limpio
       const resumen = (x.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) ||
                        x.match(/<description>([\s\S]*?)<\/description>/))?.[1]
                         ?.replace(/<[^>]+>/g, " ")?.replace(/\s+/g, " ")?.trim()?.substring(0, 250) || "";
-
-      // Contenido completo para popup
-      const contenido = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || resumen;
 
       items.push({ titulo, link, fecha, autor, imagen, resumen, contenido });
       if (items.length >= 8) break;

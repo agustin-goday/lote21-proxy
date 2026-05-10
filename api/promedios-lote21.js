@@ -10,28 +10,38 @@ export default async function handler(req, res) {
   const remate = req.query.r;
   if (!remate) return res.status(400).json({ ok: false, error: "Falta parámetro r" });
 
-  try {
-    const response = await fetch(`https://www.lote21.uy/lotes_promedios_get.asp?r=${remate}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-        "Referer": "https://www.lote21.uy/promedios/",
-      }
-    });
+  // Probar con año actual y año anterior (la URL cambia cada año)
+  const anioActual = new Date().getFullYear();
+  const urls = [
+    `https://panel.lote21.uy/${anioActual}/json/web/lotes_promedios_get.asp?r=${remate}`,
+    `https://panel.lote21.uy/${anioActual - 1}/json/web/lotes_promedios_get.asp?r=${remate}`,
+    `https://panel.lote21.uy/${anioActual + 1}/json/web/lotes_promedios_get.asp?r=${remate}`,
+  ];
 
-    const text = await response.text();
-
-    // Intentar parsear como JSON
-    let data;
+  for (const url of urls) {
     try {
-      data = JSON.parse(text);
-    } catch {
-      // Si no es JSON, devolver el texto crudo para debug
-      return res.status(200).json({ ok: true, remate, raw: text.substring(0, 2000) });
-    }
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
+          "Referer": "https://www.lote21.uy/promedios/",
+        }
+      });
 
-    return res.status(200).json({ ok: true, remate, data });
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (!text || text.includes("404") || text.includes("Error")) continue;
 
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        continue;
+      }
+
+      return res.status(200).json({ ok: true, remate, data, urlUsada: url });
+
+    } catch { continue; }
   }
+
+  return res.status(404).json({ ok: false, error: "No se encontraron promedios para el remate " + remate });
 }

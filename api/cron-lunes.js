@@ -74,7 +74,7 @@ export default async function handler(req, res) {
         </td></tr>
 
         <tr><td style="padding:0 32px 32px;text-align:center;">
-          <a href="https://lote21-proxy.vercel.app/api/generar-placa" 
+          <a href="https://lote21-proxy.vercel.app/generar.html" 
              style="display:inline-block;background:#2d6a4f;color:white;text-decoration:none;padding:14px 32px;border-radius:8px;font-size:14px;font-weight:600;letter-spacing:1px;">
             🖼 Abrir Generador de Placa
           </a>

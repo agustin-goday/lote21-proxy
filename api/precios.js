@@ -29,7 +29,12 @@ export default async function handler(req, res) {
         headers: { Authorization: `Bearer ${KV_TOKEN}` }
       });
       const d = await r.json();
-      return d.result ? JSON.parse(d.result) : null;
+      if (!d.result) return null;
+      // Upstash puede devolver doble-serializado
+      let val = d.result;
+      if (typeof val === "string") val = JSON.parse(val);
+      if (typeof val === "string") val = JSON.parse(val);
+      return val;
     } catch(e) { return null; }
   }
 
@@ -42,7 +47,7 @@ export default async function handler(req, res) {
           Authorization: `Bearer ${KV_TOKEN}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify(JSON.stringify(value))
+        body: JSON.stringify(value)
       });
       return r.ok;
     } catch(e) { return false; }

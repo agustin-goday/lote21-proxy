@@ -10,26 +10,26 @@ export default async function handler(req, res) {
   const remate = req.query.r;
   if (!remate) return res.status(400).json({ ok: false, error: "Falta parámetro r" });
 
-  // Probar con año actual y año anterior (la URL cambia cada año)
-  const anioActual = new Date().getFullYear();
-  const urls = [
-    `https://panel.lote21.uy/${anioActual}/json/web/lotes_promedios_get.asp?r=${remate}`,
-    `https://panel.lote21.uy/${anioActual - 1}/json/web/lotes_promedios_get.asp?r=${remate}`,
-    `https://panel.lote21.uy/${anioActual + 1}/json/web/lotes_promedios_get.asp?r=${remate}`,
-  ];
+  // Probar con varios años posibles
+  const anos = [2026, 2025, 2024, 2023];
+  const debug = [];
 
-  for (const url of urls) {
+  for (const ano of anos) {
+    const url = `https://panel.lote21.uy/${ano}/json/web/lotes_promedios_get.asp?r=${remate}`;
     try {
       const response = await fetch(url, {
         headers: {
           "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
           "Referer": "https://www.lote21.uy/promedios/",
+          "Accept": "application/json, text/plain, */*",
         }
       });
 
-      if (!response.ok) continue;
       const text = await response.text();
-      if (!text || text.includes("404") || text.includes("Error")) continue;
+      debug.push({ ano, status: response.status, preview: text.substring(0, 100) });
+
+      if (!response.ok) continue;
+      if (!text || text.includes("<!DOCTYPE") || text.trim() === "") continue;
 
       let data;
       try {
@@ -38,10 +38,12 @@ export default async function handler(req, res) {
         continue;
       }
 
-      return res.status(200).json({ ok: true, remate, data, urlUsada: url });
+      return res.status(200).json({ ok: true, remate, ano, data });
 
-    } catch { continue; }
+    } catch(e) {
+      debug.push({ ano, error: e.message });
+    }
   }
 
-  return res.status(404).json({ ok: false, error: "No se encontraron promedios para el remate " + remate });
+  return res.status(404).json({ ok: false, error: "No se encontraron promedios", debug });
 }

@@ -1,4 +1,4 @@
-// api/plazarural.js — Scraper del próximo remate de Plaza Rural
+// api/plazarural.js — Encuentra el próximo remate de Plaza Rural por fecha
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -7,49 +7,67 @@ export default async function handler(req, res) {
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
+  const MESES = {
+    "enero":1,"febrero":2,"marzo":3,"abril":4,"mayo":5,"junio":6,
+    "julio":7,"agosto":8,"septiembre":9,"octubre":10,"noviembre":11,"diciembre":12
+  };
+
   try {
-    // 1. Leer /remates y tomar el primer número de remate activo
+    // 1. Obtener lista de remates activos
     const listRes = await fetch("https://plazarural.com.uy/remates", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html",
-      },
+      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
     });
     const listHtml = await listRes.text();
 
-    // Extraer primer número de remate de los links /remates/NNN
-    const numeroMatch = listHtml.match(/\/remates\/(\d+)/);
-    const numero = numeroMatch ? numeroMatch[1] : null;
-    if (!numero) throw new Error("No se encontró número de remate");
+    // Extraer todos los números de remate en orden
+    const numerosMatch = [...listHtml.matchAll(/\/remates\/(\d+)/g)];
+    const numeros = [...new Set(numerosMatch.map(m => parseInt(m[1])))].sort((a,b) => a - b);
 
-    // 2. Leer la página del remate para obtener fecha completa
-    const remateRes = await fetch(`https://plazarural.com.uy/remates/${numero}`, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html",
-      },
-    });
-    const remateHtml = await remateRes.text();
-    const remateTexto = remateHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    if (!numeros.length) throw new Error("No se encontraron remates");
 
-    // Formato: "Jueves 10 · Viernes 11 · Diciembre 2026"
-    const fechaMatch = remateTexto.match(
-      /((?:Lunes|Martes|Mi[eé]rcoles|Jueves|Viernes|S[aá]bado|Domingo)\s+\d+\s*[·\-]\s*(?:.*?)\d{4})/i
-    );
-    const fechaCompleta = fechaMatch ? fechaMatch[1].replace(/\s+/g, " ").trim() : null;
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
 
-    // Lugar del remate
-    const lugarMatch = remateTexto.match(/Hotel[^.]{0,60}|Complejo[^.]{0,60}|Auditorio[^.]{0,60}|Sal[oó]n[^.]{0,60}/i);
-    const lugar = lugarMatch ? lugarMatch[0].trim() : null;
+    // 2. Recorrer remates en orden ascendente y tomar el primero con fecha >= hoy
+    for (const numero of numeros) {
+      try {
+        const remateRes = await fetch(`https://plazarural.com.uy/remates/${numero}`, {
+          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
+        });
+        const remateHtml = await remateRes.text();
+        const texto = remateHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    return res.status(200).json({
-      ok: true,
-      numero,
-      fechaCompleta,
-      lugar,
-      url: `https://plazarural.com.uy/remates/${numero}`,
-      timestamp: new Date().toISOString(),
-    });
+        // Buscar "Jueves 14 · Viernes 15 · Mayo 2026" o "Miércoles 22 · Mayo 2026"
+        const fechaMatch = texto.match(
+          /(?:Lunes|Martes|Mi[eé]rcoles|Jueves|Viernes|S[aá]bado|Domingo)\s+(\d+)\s*[·\-·]\s*(?:.*?)\s*(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\s+(\d{4})/i
+        );
+
+        if (!fechaMatch) continue;
+
+        const dia  = parseInt(fechaMatch[1]);
+        const mes  = MESES[fechaMatch[2].toLowerCase()];
+        const anio = parseInt(fechaMatch[3]);
+        const fechaRemate = new Date(anio, mes - 1, dia);
+
+        if (fechaRemate >= hoy) {
+          // Este es el próximo remate
+          const fechaCompleta = texto.match(
+            /((?:Lunes|Martes|Mi[eé]rcoles|Jueves|Viernes|S[aá]bado|Domingo)\s+\d+\s*[·\-]\s*(?:.*?)\d{4})/i
+          )?.[1]?.replace(/\s+/g, " ").trim();
+
+          return res.status(200).json({
+            ok: true,
+            numero: String(numero),
+            fechaCompleta: fechaCompleta || null,
+            lugar: "Hotel Cottage de Montevideo",
+            url: `https://plazarural.com.uy/remates/${numero}`,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (_) { continue; }
+    }
+
+    throw new Error("No se encontró próximo remate");
 
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

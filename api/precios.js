@@ -80,12 +80,16 @@ export default async function handler(req, res) {
     let vaquillonaAnt = guardado?.vaquillona || null;
     const semanaGuardada = guardado?.semana  || null;
 
-    // Guardar actuales si cambió la semana
-    if (semana && semana !== semanaGuardada && novillo && vaca && vaquillona) {
-      await kvSet("acg_precios_anteriores", {
-        semana, novillo, vaca, vaquillona,
-        guardadoEn: new Date().toISOString()
-      });
+    // Guardar actuales solo si la semana nueva es MAYOR que la guardada
+    if (semana && novillo && vaca && vaquillona) {
+      const semNum = parseInt(semana);
+      const semGuardadaNum = parseInt(semanaGuardada || "0");
+      if (semNum > semGuardadaNum) {
+        await kvSet("acg_precios_anteriores", {
+          semana, novillo, vaca, vaquillona,
+          guardadoEn: new Date().toISOString()
+        });
+      }
     }
 
     return res.status(200).json({

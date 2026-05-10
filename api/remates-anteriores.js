@@ -35,7 +35,7 @@ export default async function handler(req, res) {
       remates.push({
         numero: num,
         urlLotes:     `https://plazarural.com.uy/remates/${num}?_token=dxAkpnxQnWSIWopkJYMpHAiHkT58qV1uxQYFy9RV&categoria_id=&filtro_condicion=&escritorio_id=7&departamento_id=&inspector_id=&lote_especial_id=&nro_lote=&nro_inspeccion=`,
-        urlPromedios: `https://plazarural.com.uy/promedios`,
+        urlPromedios: `https://plazarural.com.uy/promedios?nro_remate=${num}`,
       });
     }
 

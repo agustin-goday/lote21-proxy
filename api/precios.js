@@ -1,9 +1,9 @@
-// api/precios.js — login via wp-login.php
+// api/precios.js — con Upstash para guardar semana anterior
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -12,123 +12,83 @@ export default async function handler(req, res) {
     return m ? m[1].replace(",", ".") : null;
   }
 
+  // Upstash Redis REST API
+  const KV_URL   = process.env.KV_REST_API_URL   || process.env.STORAGE_KV_REST_API_URL;
+  const KV_TOKEN = process.env.KV_REST_API_TOKEN  || process.env.STORAGE_KV_REST_API_TOKEN;
+
+  async function kvGet(key) {
+    if (!KV_URL || !KV_TOKEN) return null;
+    try {
+      const r = await fetch(`${KV_URL}/get/${key}`, {
+        headers: { Authorization: `Bearer ${KV_TOKEN}` }
+      });
+      const d = await r.json();
+      return d.result ? JSON.parse(d.result) : null;
+    } catch { return null; }
+  }
+
+  async function kvSet(key, value) {
+    if (!KV_URL || !KV_TOKEN) return;
+    try {
+      await fetch(`${KV_URL}/set/${key}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KV_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify(JSON.stringify(value))
+      });
+    } catch {}
+  }
+
   try {
-    // Valores actuales desde home
+    // ── Scrape ACG home ──
     const homeRes = await fetch("https://acg.com.uy/", {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
     });
     const homeHtml = await homeRes.text();
-    const homeTexto = homeHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    const t = homeHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    const semana     = homeTexto.match(/semana\s+N[°º]\s*(\d+)/i)?.[1] || null;
-    const novillo    = extraer(homeTexto, /Novillo[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const vaca       = extraer(homeTexto, /Vaca[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const vaquillona = extraer(homeTexto, /Vaquillona[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const ternero       = extraer(homeTexto, /Ternero[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const ternera       = extraer(homeTexto, /Ternera[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const vacaInvernada = extraer(homeTexto, /Vaca de Invernada[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const bovinos    = extraer(homeTexto, /Faena semanal\s*([\d.,]+)\s*vacunos/i);
-    const bovinosAnt = extraer(homeTexto, /vacunos\s*([\d.,]+)\s*semana anterior/i);
-    const ovinos     = extraer(homeTexto, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
-    const ovinosAnt  = extraer(homeTexto, /ovinos\s*([\d.,]+)\s*semana anterior/i);
+    const semana     = t.match(/semana\s+N[°º]\s*(\d+)/i)?.[1] || null;
+    const novillo    = extraer(t, /Novillo[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+    const vaca       = extraer(t, /Vaca[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+    const vaquillona = extraer(t, /Vaquillona[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+    const ternero       = extraer(t, /Ternero[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+    const ternera       = extraer(t, /Ternera[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+    const vacaInvernada = extraer(t, /Vaca de Invernada[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+    const bovinos    = extraer(t, /Faena semanal\s*([\d.,]+)\s*vacunos/i);
+    const bovinosAnt = extraer(t, /vacunos\s*([\d.,]+)\s*semana anterior/i);
+    const ovinos     = extraer(t, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
+    const ovinosAnt  = extraer(t, /ovinos\s*([\d.,]+)\s*semana anterior/i);
 
-    const ACG_USER = process.env.ACG_USER;
-    const ACG_PASS = process.env.ACG_PASS;
-    const debug = { hasUser: !!ACG_USER, hasPass: !!ACG_PASS };
+    // ── Leer semana anterior guardada ──
+    const guardado = await kvGet("acg_precios_anteriores");
+    let novilloAnt    = guardado?.novillo    || null;
+    let vacaAnt       = guardado?.vaca       || null;
+    let vaquillonaAnt = guardado?.vaquillona || null;
+    const semanaGuardada = guardado?.semana  || null;
 
-    let novilloAnt = null, vacaAnt = null, vaquillonaAnt = null;
-
-    if (ACG_USER && ACG_PASS) {
-      try {
-        // Obtener nonce desde wp-login.php (WordPress nativo)
-        const wpLoginPageRes = await fetch("https://acg.com.uy/wp-login.php", {
-          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" },
-        });
-        const wpLoginHtml = await wpLoginPageRes.text();
-        const initCookies = wpLoginPageRes.headers.get("set-cookie") || "";
-        debug.wpLoginStatus = wpLoginPageRes.status;
-
-        // Extraer nonce de wp-login
-        const nonceMatch = wpLoginHtml.match(/name="testcookie"\s+value="([^"]*)"/);
-        debug.wpNonce = !!nonceMatch;
-
-        // POST a wp-login.php
-        const wpLoginBody = new URLSearchParams({
-          log: ACG_USER,
-          pwd: ACG_PASS,
-          "wp-submit": "Acceder",
-          redirect_to: "https://acg.com.uy/ganado-gordo/",
-          testcookie: "1",
-        });
-
-        const wpLoginRes = await fetch("https://acg.com.uy/wp-login.php", {
-          method: "POST",
-          headers: {
-            "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Cookie": initCookies + "; wordpress_test_cookie=WP+Cookie+check",
-            "Referer": "https://acg.com.uy/wp-login.php",
-          },
-          body: wpLoginBody.toString(),
-          redirect: "manual",
-        });
-
-        debug.wpLoginPostStatus = wpLoginRes.status;
-        debug.wpLoginLocation = wpLoginRes.headers.get("location") || "no redirect";
-
-        const sessionCookies = [initCookies, wpLoginRes.headers.get("set-cookie") || ""]
-          .filter(Boolean).join("; ");
-        debug.sessionCookieLen = sessionCookies.length;
-
-        // Acceder a ganado gordo con la sesión de WordPress
-        const gordoRes = await fetch("https://acg.com.uy/ganado-gordo/", {
-          headers: {
-            "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-            "Cookie": sessionCookies,
-            "Referer": "https://acg.com.uy/",
-          },
-          redirect: "follow",
-        });
-
-        debug.gordoStatus = gordoRes.status;
-        const gordoHtml = await gordoRes.text();
-        const gordoTexto = gordoHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
-
-        debug.hasPremiumContent = gordoTexto.includes("cuarta balanza");
-        debug.hasLoginRequired  = gordoTexto.includes("suscripción premium");
-
-        if (debug.hasPremiumContent && !debug.hasLoginRequired) {
-          // Extraer todos los precios — buscar pares actual/anterior
-          const allVals = [...gordoTexto.matchAll(/([\d]+[.,][\d]+)\s*D[oó]lares por kilo en cuarta balanza/gi)];
-          debug.allVals = allVals.map(m => m[1]);
-
-          // Buscar "semana anterior" explícitamente
-          const semAntIdx = gordoTexto.indexOf("Semana anterior");
-          if (semAntIdx > -1) {
-            const afterAnt = gordoTexto.substring(semAntIdx, semAntIdx + 500);
-            const valsAnt = [...afterAnt.matchAll(/([\d]+[.,][\d]+)/g)].map(m => m[1].replace(",","."));
-            novilloAnt    = valsAnt[0] || null;
-            vacaAnt       = valsAnt[1] || null;
-            vaquillonaAnt = valsAnt[2] || null;
-          }
-        }
-
-      } catch(e) {
-        debug.error = e.message;
-      }
+    // ── Guardar actuales si cambió la semana ──
+    if (semana && semana !== semanaGuardada && novillo && vaca && vaquillona) {
+      await kvSet("acg_precios_anteriores", {
+        semana,
+        novillo,
+        vaca,
+        vaquillona,
+        guardadoEn: new Date().toISOString()
+      });
     }
 
     return res.status(200).json({
-      ok: true, semana,
+      ok: true,
+      semana,
       gordos: { novillo, novilloAnt, vaca, vacaAnt, vaquillona, vaquillonaAnt },
       reposicion: { ternero, ternera, vacaInvernada },
       faena: {
-        bovinos: bovinos?.replace(/\./g,"") || null,
+        bovinos:    bovinos?.replace(/\./g,"")    || null,
         bovinosAnt: bovinosAnt?.replace(/\./g,"") || null,
-        ovinos: ovinos?.replace(/\./g,"") || null,
-        ovinosAnt: ovinosAnt?.replace(/\./g,"") || null,
+        ovinos:     ovinos?.replace(/\./g,"")     || null,
+        ovinosAnt:  ovinosAnt?.replace(/\./g,"")  || null,
       },
-      debug,
+      semanaAnteriorGuardada: semanaGuardada,
+      kvConectado: !!(KV_URL && KV_TOKEN),
       timestamp: new Date().toISOString(),
     });
 

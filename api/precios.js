@@ -1,9 +1,9 @@
-// api/precios.js — Precios ACG con login para obtener semana anterior
+// api/precios.js — con debug de login ACG
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
+  res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -12,64 +12,55 @@ export default async function handler(req, res) {
     return m ? m[1].replace(",", ".") : null;
   }
 
-  function extraerTodos(texto, patron) {
-    return [...texto.matchAll(patron)].map(m => m[1].replace(",", "."));
-  }
-
   try {
-    // ── 1. Obtener valores actuales desde el home (público) ──
+    // Valores actuales desde home (público)
     const homeRes = await fetch("https://acg.com.uy/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html",
-      },
+      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
     });
     const homeHtml = await homeRes.text();
     const homeTexto = homeHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    const semanaMatch = homeTexto.match(/semana\s+N[°º]\s*(\d+)/i);
-    const semana = semanaMatch ? semanaMatch[1] : null;
-
+    const semana     = homeTexto.match(/semana\s+N[°º]\s*(\d+)/i)?.[1] || null;
     const novillo    = extraer(homeTexto, /Novillo[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
     const vaca       = extraer(homeTexto, /Vaca[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
     const vaquillona = extraer(homeTexto, /Vaquillona[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
     const ternero       = extraer(homeTexto, /Ternero[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
     const ternera       = extraer(homeTexto, /Ternera[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
     const vacaInvernada = extraer(homeTexto, /Vaca de Invernada[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-
-    // Faena
     const bovinos    = extraer(homeTexto, /Faena semanal\s*([\d.,]+)\s*vacunos/i);
     const bovinosAnt = extraer(homeTexto, /vacunos\s*([\d.,]+)\s*semana anterior/i);
     const ovinos     = extraer(homeTexto, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
     const ovinosAnt  = extraer(homeTexto, /ovinos\s*([\d.,]+)\s*semana anterior/i);
 
-    // ── 2. Login en ACG para obtener semana anterior ──
-    let novilloAnt = null, vacaAnt = null, vaquillonaAnt = null;
-
+    // Debug login
     const ACG_USER = process.env.ACG_USER;
     const ACG_PASS = process.env.ACG_PASS;
+    const debug = { hasUser: !!ACG_USER, hasPass: !!ACG_PASS };
+
+    let novilloAnt = null, vacaAnt = null, vaquillonaAnt = null;
 
     if (ACG_USER && ACG_PASS) {
       try {
-        // Obtener nonce/token del formulario de login
+        // Paso 1: obtener página de login y cookies iniciales
         const loginPageRes = await fetch("https://acg.com.uy/iniciar-sesion/", {
-          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" },
+          redirect: "follow",
         });
         const loginPageHtml = await loginPageRes.text();
-        const cookies = loginPageRes.headers.get("set-cookie") || "";
+        const initCookies = loginPageRes.headers.get("set-cookie") || "";
+        debug.loginPageStatus = loginPageRes.status;
 
-        // Extraer nonce de WordPress
+        // Extraer nonce
         const nonceMatch = loginPageHtml.match(/name="woocommerce-login-nonce"\s+value="([^"]+)"/);
         const nonce = nonceMatch ? nonceMatch[1] : "";
-        const refMatch = loginPageHtml.match(/name="_wp_http_referer"\s+value="([^"]+)"/);
-        const wpRef = refMatch ? refMatch[1] : "/iniciar-sesion/";
+        debug.nonceFound = !!nonce;
 
-        // Hacer login
+        // Paso 2: POST login
         const loginBody = new URLSearchParams({
           username: ACG_USER,
           password: ACG_PASS,
           "woocommerce-login-nonce": nonce,
-          "_wp_http_referer": wpRef,
+          "_wp_http_referer": "/iniciar-sesion/",
           login: "Acceder",
         });
 
@@ -78,59 +69,68 @@ export default async function handler(req, res) {
           headers: {
             "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Cookie": cookies,
+            "Cookie": initCookies,
             "Referer": "https://acg.com.uy/iniciar-sesion/",
           },
           body: loginBody.toString(),
           redirect: "manual",
         });
 
-        // Recoger cookies de sesión
-        const sessionCookies = [cookies, loginRes.headers.get("set-cookie") || ""]
-          .filter(Boolean).join("; ");
+        debug.loginStatus = loginRes.status;
+        debug.loginLocation = loginRes.headers.get("location") || "no redirect";
 
-        // Acceder a la página de ganado gordo con sesión
+        // Recoger cookies de sesión
+        const loginCookies = loginRes.headers.get("set-cookie") || "";
+        const allCookies = [initCookies, loginCookies].filter(Boolean).join("; ");
+        debug.hasCookies = allCookies.length > 50;
+
+        // Paso 3: acceder a ganado gordo con sesión
         const gordoRes = await fetch("https://acg.com.uy/ganado-gordo/", {
           headers: {
             "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-            "Cookie": sessionCookies,
+            "Cookie": allCookies,
+            "Referer": "https://acg.com.uy/",
           },
+          redirect: "follow",
         });
+
+        debug.gordoStatus = gordoRes.status;
         const gordoHtml = await gordoRes.text();
         const gordoTexto = gordoHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-        // En la página de ganado gordo logueado aparecen semana actual y anterior
-        // Extraer todos los valores de novillo, vaca, vaquillona (actual + anterior)
-        const novillos    = extraerTodos(gordoTexto, /Novillo[\s\S]{0,100}?([\d]+[.,][\d]+)\s*D[oó]lares por kilo en cuarta balanza/gi);
-        const vacas       = extraerTodos(gordoTexto, /Vaca[^V][\s\S]{0,100}?([\d]+[.,][\d]+)\s*D[oó]lares por kilo en cuarta balanza/gi);
-        const vaquillonas = extraerTodos(gordoTexto, /Vaquillona[\s\S]{0,100}?([\d]+[.,][\d]+)\s*D[oó]lares por kilo en cuarta balanza/gi);
+        // Ver si hay contenido premium (buscar palabra clave)
+        debug.hasPremiumContent = gordoTexto.includes("cuarta balanza");
+        debug.hasLoginRequired = gordoTexto.includes("suscripción premium") || gordoTexto.includes("registrarte");
 
-        // El segundo valor es la semana anterior
-        novilloAnt    = novillos[1]    || null;
-        vacaAnt       = vacas[1]       || null;
-        vaquillonaAnt = vaquillonas[1] || null;
+        if (debug.hasPremiumContent) {
+          // Extraer todos los valores — el primero es actual, el segundo es anterior
+          const allNovillos = [...gordoTexto.matchAll(/(\d+[.,]\d+)\s*D[oó]lares por kilo en cuarta balanza/gi)];
+          debug.allValues = allNovillos.map(m => m[1]);
 
-      } catch (loginErr) {
-        // Si falla el login, continuar sin valores anteriores
-        console.error("Login ACG failed:", loginErr.message);
+          // Buscar específicamente "Semana anterior"
+          const antMatch = gordoTexto.match(/Semana anterior[\s\S]{0,50}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+          if (antMatch) {
+            novilloAnt = antMatch[1].replace(",",".");
+          }
+        }
+
+      } catch (e) {
+        debug.loginError = e.message;
       }
     }
 
     return res.status(200).json({
       ok: true,
       semana,
-      gordos: {
-        novillo,    novilloAnt,
-        vaca,       vacaAnt,
-        vaquillona, vaquillonaAnt,
-      },
+      gordos: { novillo, novilloAnt, vaca, vacaAnt, vaquillona, vaquillonaAnt },
       reposicion: { ternero, ternera, vacaInvernada },
       faena: {
-        bovinos:    bovinos    ? bovinos.replace(/\./g,"")    : null,
-        bovinosAnt: bovinosAnt ? bovinosAnt.replace(/\./g,"") : null,
-        ovinos:     ovinos     ? ovinos.replace(/\./g,"")     : null,
-        ovinosAnt:  ovinosAnt  ? ovinosAnt.replace(/\./g,"")  : null,
+        bovinos: bovinos?.replace(/\./g,"") || null,
+        bovinosAnt: bovinosAnt?.replace(/\./g,"") || null,
+        ovinos: ovinos?.replace(/\./g,"") || null,
+        ovinosAnt: ovinosAnt?.replace(/\./g,"") || null,
       },
+      debug,
       timestamp: new Date().toISOString(),
     });
 

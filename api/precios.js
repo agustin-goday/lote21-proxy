@@ -1,4 +1,4 @@
-// api/precios.js — con debug de login ACG
+// api/precios.js — login via wp-login.php
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -13,7 +13,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Valores actuales desde home (público)
+    // Valores actuales desde home
     const homeRes = await fetch("https://acg.com.uy/", {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
     });
@@ -32,7 +32,6 @@ export default async function handler(req, res) {
     const ovinos     = extraer(homeTexto, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
     const ovinosAnt  = extraer(homeTexto, /ovinos\s*([\d.,]+)\s*semana anterior/i);
 
-    // Debug login
     const ACG_USER = process.env.ACG_USER;
     const ACG_PASS = process.env.ACG_PASS;
     const debug = { hasUser: !!ACG_USER, hasPass: !!ACG_PASS };
@@ -41,54 +40,51 @@ export default async function handler(req, res) {
 
     if (ACG_USER && ACG_PASS) {
       try {
-        // Paso 1: obtener página de login y cookies iniciales
-        const loginPageRes = await fetch("https://acg.com.uy/iniciar-sesion/", {
+        // Obtener nonce desde wp-login.php (WordPress nativo)
+        const wpLoginPageRes = await fetch("https://acg.com.uy/wp-login.php", {
           headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" },
-          redirect: "follow",
         });
-        const loginPageHtml = await loginPageRes.text();
-        const initCookies = loginPageRes.headers.get("set-cookie") || "";
-        debug.loginPageStatus = loginPageRes.status;
+        const wpLoginHtml = await wpLoginPageRes.text();
+        const initCookies = wpLoginPageRes.headers.get("set-cookie") || "";
+        debug.wpLoginStatus = wpLoginPageRes.status;
 
-        // Extraer nonce
-        const nonceMatch = loginPageHtml.match(/name="woocommerce-login-nonce"\s+value="([^"]+)"/);
-        const nonce = nonceMatch ? nonceMatch[1] : "";
-        debug.nonceFound = !!nonce;
+        // Extraer nonce de wp-login
+        const nonceMatch = wpLoginHtml.match(/name="testcookie"\s+value="([^"]*)"/);
+        debug.wpNonce = !!nonceMatch;
 
-        // Paso 2: POST login
-        const loginBody = new URLSearchParams({
-          username: ACG_USER,
-          password: ACG_PASS,
-          "woocommerce-login-nonce": nonce,
-          "_wp_http_referer": "/iniciar-sesion/",
-          login: "Acceder",
+        // POST a wp-login.php
+        const wpLoginBody = new URLSearchParams({
+          log: ACG_USER,
+          pwd: ACG_PASS,
+          "wp-submit": "Acceder",
+          redirect_to: "https://acg.com.uy/ganado-gordo/",
+          testcookie: "1",
         });
 
-        const loginRes = await fetch("https://acg.com.uy/iniciar-sesion/", {
+        const wpLoginRes = await fetch("https://acg.com.uy/wp-login.php", {
           method: "POST",
           headers: {
             "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
             "Content-Type": "application/x-www-form-urlencoded",
-            "Cookie": initCookies,
-            "Referer": "https://acg.com.uy/iniciar-sesion/",
+            "Cookie": initCookies + "; wordpress_test_cookie=WP+Cookie+check",
+            "Referer": "https://acg.com.uy/wp-login.php",
           },
-          body: loginBody.toString(),
+          body: wpLoginBody.toString(),
           redirect: "manual",
         });
 
-        debug.loginStatus = loginRes.status;
-        debug.loginLocation = loginRes.headers.get("location") || "no redirect";
+        debug.wpLoginPostStatus = wpLoginRes.status;
+        debug.wpLoginLocation = wpLoginRes.headers.get("location") || "no redirect";
 
-        // Recoger cookies de sesión
-        const loginCookies = loginRes.headers.get("set-cookie") || "";
-        const allCookies = [initCookies, loginCookies].filter(Boolean).join("; ");
-        debug.hasCookies = allCookies.length > 50;
+        const sessionCookies = [initCookies, wpLoginRes.headers.get("set-cookie") || ""]
+          .filter(Boolean).join("; ");
+        debug.sessionCookieLen = sessionCookies.length;
 
-        // Paso 3: acceder a ganado gordo con sesión
+        // Acceder a ganado gordo con la sesión de WordPress
         const gordoRes = await fetch("https://acg.com.uy/ganado-gordo/", {
           headers: {
             "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0",
-            "Cookie": allCookies,
+            "Cookie": sessionCookies,
             "Referer": "https://acg.com.uy/",
           },
           redirect: "follow",
@@ -98,30 +94,32 @@ export default async function handler(req, res) {
         const gordoHtml = await gordoRes.text();
         const gordoTexto = gordoHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-        // Ver si hay contenido premium (buscar palabra clave)
         debug.hasPremiumContent = gordoTexto.includes("cuarta balanza");
-        debug.hasLoginRequired = gordoTexto.includes("suscripción premium") || gordoTexto.includes("registrarte");
+        debug.hasLoginRequired  = gordoTexto.includes("suscripción premium");
 
-        if (debug.hasPremiumContent) {
-          // Extraer todos los valores — el primero es actual, el segundo es anterior
-          const allNovillos = [...gordoTexto.matchAll(/(\d+[.,]\d+)\s*D[oó]lares por kilo en cuarta balanza/gi)];
-          debug.allValues = allNovillos.map(m => m[1]);
+        if (debug.hasPremiumContent && !debug.hasLoginRequired) {
+          // Extraer todos los precios — buscar pares actual/anterior
+          const allVals = [...gordoTexto.matchAll(/([\d]+[.,][\d]+)\s*D[oó]lares por kilo en cuarta balanza/gi)];
+          debug.allVals = allVals.map(m => m[1]);
 
-          // Buscar específicamente "Semana anterior"
-          const antMatch = gordoTexto.match(/Semana anterior[\s\S]{0,50}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-          if (antMatch) {
-            novilloAnt = antMatch[1].replace(",",".");
+          // Buscar "semana anterior" explícitamente
+          const semAntIdx = gordoTexto.indexOf("Semana anterior");
+          if (semAntIdx > -1) {
+            const afterAnt = gordoTexto.substring(semAntIdx, semAntIdx + 500);
+            const valsAnt = [...afterAnt.matchAll(/([\d]+[.,][\d]+)/g)].map(m => m[1].replace(",","."));
+            novilloAnt    = valsAnt[0] || null;
+            vacaAnt       = valsAnt[1] || null;
+            vaquillonaAnt = valsAnt[2] || null;
           }
         }
 
-      } catch (e) {
-        debug.loginError = e.message;
+      } catch(e) {
+        debug.error = e.message;
       }
     }
 
     return res.status(200).json({
-      ok: true,
-      semana,
+      ok: true, semana,
       gordos: { novillo, novilloAnt, vaca, vacaAnt, vaquillona, vaquillonaAnt },
       reposicion: { ternero, ternera, vacaInvernada },
       faena: {

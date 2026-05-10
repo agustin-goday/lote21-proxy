@@ -1,4 +1,4 @@
-// api/precios.js — con Upstash para guardar semana anterior
+// api/precios.js — con Upstash KV para semana anterior
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,9 +12,15 @@ export default async function handler(req, res) {
     return m ? m[1].replace(",", ".") : null;
   }
 
-  // Upstash Redis REST API
-  const KV_URL   = process.env.KV_REST_API_URL   || process.env.STORAGE_KV_REST_API_URL;
-  const KV_TOKEN = process.env.KV_REST_API_TOKEN  || process.env.STORAGE_KV_REST_API_TOKEN;
+  // Probar todos los posibles nombres de variables que Upstash/Vercel puede usar
+  const KV_URL   = process.env.STORAGE_KV_REST_API_URL
+                || process.env.KV_REST_API_URL
+                || process.env.UPSTASH_REDIS_REST_URL
+                || process.env.REDIS_URL;
+
+  const KV_TOKEN = process.env.STORAGE_KV_REST_API_TOKEN
+                || process.env.KV_REST_API_TOKEN
+                || process.env.UPSTASH_REDIS_REST_TOKEN;
 
   async function kvGet(key) {
     if (!KV_URL || !KV_TOKEN) return null;
@@ -24,22 +30,26 @@ export default async function handler(req, res) {
       });
       const d = await r.json();
       return d.result ? JSON.parse(d.result) : null;
-    } catch { return null; }
+    } catch(e) { return null; }
   }
 
   async function kvSet(key, value) {
-    if (!KV_URL || !KV_TOKEN) return;
+    if (!KV_URL || !KV_TOKEN) return false;
     try {
-      await fetch(`${KV_URL}/set/${key}`, {
+      const r = await fetch(`${KV_URL}/set/${key}`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${KV_TOKEN}`, "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${KV_TOKEN}`,
+          "Content-Type": "application/json"
+        },
         body: JSON.stringify(JSON.stringify(value))
       });
-    } catch {}
+      return r.ok;
+    } catch(e) { return false; }
   }
 
   try {
-    // ── Scrape ACG home ──
+    // Scrape ACG home
     const homeRes = await fetch("https://acg.com.uy/", {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
     });
@@ -58,20 +68,17 @@ export default async function handler(req, res) {
     const ovinos     = extraer(t, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
     const ovinosAnt  = extraer(t, /ovinos\s*([\d.,]+)\s*semana anterior/i);
 
-    // ── Leer semana anterior guardada ──
+    // Leer semana anterior desde KV
     const guardado = await kvGet("acg_precios_anteriores");
     let novilloAnt    = guardado?.novillo    || null;
     let vacaAnt       = guardado?.vaca       || null;
     let vaquillonaAnt = guardado?.vaquillona || null;
     const semanaGuardada = guardado?.semana  || null;
 
-    // ── Guardar actuales si cambió la semana ──
+    // Guardar actuales si cambió la semana
     if (semana && semana !== semanaGuardada && novillo && vaca && vaquillona) {
       await kvSet("acg_precios_anteriores", {
-        semana,
-        novillo,
-        vaca,
-        vaquillona,
+        semana, novillo, vaca, vaquillona,
         guardadoEn: new Date().toISOString()
       });
     }
@@ -89,6 +96,7 @@ export default async function handler(req, res) {
       },
       semanaAnteriorGuardada: semanaGuardada,
       kvConectado: !!(KV_URL && KV_TOKEN),
+      kvUrl: KV_URL ? KV_URL.substring(0, 30) + "..." : "no encontrada",
       timestamp: new Date().toISOString(),
     });
 

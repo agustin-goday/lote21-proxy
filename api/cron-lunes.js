@@ -1,12 +1,35 @@
 // api/cron-lunes.js — Cron job lunes 21hs Uruguay (00:00 UTC martes)
 
 export default async function handler(req, res) {
+  const KV_URL   = process.env.STORAGE_KV_REST_API_URL || process.env.KV_REST_API_URL;
+  const KV_TOKEN = process.env.STORAGE_KV_REST_API_TOKEN || process.env.KV_REST_API_TOKEN;
+
+  async function kvSet(key, value) {
+    if (!KV_URL || !KV_TOKEN) return;
+    await fetch(`${KV_URL}/set/${key}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KV_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify(value)
+    });
+  }
+
   try {
     // Obtener datos actuales de ACG
     const preciosRes = await fetch("https://lote21-proxy.vercel.app/api/precios?nocache=" + Date.now());
     const d = await preciosRes.json();
 
     if (!d.ok) throw new Error("No se pudieron obtener los precios");
+
+    // Guardar valores actuales como "semana anterior" para la próxima semana
+    if (d.gordos.novillo && d.gordos.vaca && d.gordos.vaquillona) {
+      await kvSet("acg_precios_anteriores", {
+        semana:     d.semana,
+        novillo:    d.gordos.novillo,
+        vaca:       d.gordos.vaca,
+        vaquillona: d.gordos.vaquillona,
+        guardadoEn: new Date().toISOString()
+      });
+    }
 
     const sem        = d.semana || "?";
     const novillo    = d.gordos.novillo    || "—";

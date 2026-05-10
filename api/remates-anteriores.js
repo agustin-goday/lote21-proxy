@@ -17,21 +17,31 @@ export default async function handler(req, res) {
     const numeroActual = numeroMatch ? parseInt(numeroMatch[1]) : null;
     if (!numeroActual) throw new Error("No se encontró número de remate");
 
-    // Generar lista de últimos 10 remates anteriores (excluye el actual)
+    // Obtener el número del próximo remate de Aramburu desde el proxy
+    const aramburuRes = await fetch("https://lote21-proxy.vercel.app/api/plazarural", {
+      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+    });
+    const aramburuData = await aramburuRes.json();
+    const numeroAramburu = aramburuData.ok ? parseInt(aramburuData.numero) : null;
+
+    // Usar el número de Aramburu como base — los anteriores son los remates ya pasados
+    const base = numeroAramburu || numeroActual;
+
+    // Generar lista de últimos 10 remates anteriores al de Aramburu
     const remates = [];
     for (let i = 1; i <= 10; i++) {
-      const num = numeroActual - i;
+      const num = base - i;
       if (num < 1) break;
       remates.push({
         numero: num,
         urlLotes:     `https://plazarural.com.uy/remates/${num}?_token=dxAkpnxQnWSIWopkJYMpHAiHkT58qV1uxQYFy9RV&categoria_id=&filtro_condicion=&escritorio_id=7&departamento_id=&inspector_id=&lote_especial_id=&nro_lote=&nro_inspeccion=`,
-        urlPromedios: `https://plazarural.com.uy/promedios?nro_remate=${num}`,
+        urlPromedios: `https://plazarural.com.uy/promedios`,
       });
     }
 
     return res.status(200).json({
       ok: true,
-      numeroActual,
+      numeroActual: base,
       remates,
       timestamp: new Date().toISOString(),
     });

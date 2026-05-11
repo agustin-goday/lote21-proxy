@@ -101,18 +101,27 @@ export default async function handler(req, res) {
       const videoMatch = modalHtml.match(/href="(https:\/\/vz-[^"]+)"\s+download/);
       const videoUrl = videoMatch ? videoMatch[1] : null;
 
-      // Extraer datos adicionales del modal
-      const cabMatch = modalHtml.match(/CABEZAS\s*<br>\s*<span[^>]*>(\d+)<\/span>/);
-      const pesoMatch = modalHtml.match(/PESO\s*<br>\s*<span[^>]*>(\d+)/);
-      const dptMatch = modalHtml.match(/<h2 class="h4 font-weight-bold">\s*([^<]+)<\/h2>/);
+      // Extraer datos del modal
+      const cabMatch   = modalHtml.match(/CABEZAS\s*<br>\s*<span[^>]*>(\d+)<\/span>/);
+      const pesoMatch  = modalHtml.match(/PESO\s*<br>\s*<span[^>]*>(\d+)/);
+      const claseMatch = modalHtml.match(/CLASE\s*<br>\s*<span[^>]*>([^<]+)<\/span>/);
+      const estadoMatch= modalHtml.match(/ESTADO\s*<br>\s*<span[^>]*>([^<]+)<\/span>/);
+      const dptMatch   = modalHtml.match(/<h2 class="h4 font-weight-bold">\s*([^<]+)<\/h2>/);
       const estabMatch = modalHtml.match(/<b>Establecimiento:<\/b>\s*<span>([^<]+)<\/span>/);
+
+      // Observaciones — pestaña OBSERVACIONES
+      const obsMatch = modalHtml.match(/<p class="mb-0 font-weight-bold">Observaciones:<\/p>\s*<p>([\s\S]*?)<\/p>/);
+      const observaciones = obsMatch ? obsMatch[1].replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim() : null;
 
       return {
         ...lote,
-        cabezas: cabMatch ? cabMatch[1] : lote.cabezas,
-        peso: pesoMatch ? pesoMatch[1] : lote.peso,
-        departamento: dptMatch ? dptMatch[1].trim() : lote.departamento,
+        cabezas:       cabMatch   ? cabMatch[1]          : lote.cabezas,
+        peso:          pesoMatch  ? pesoMatch[1]         : lote.peso,
+        clase:         claseMatch ? claseMatch[1].trim() : null,
+        estado:        estadoMatch? estadoMatch[1].trim(): null,
+        departamento:  dptMatch   ? dptMatch[1].trim()   : lote.departamento,
         establecimiento: estabMatch ? estabMatch[1].trim() : null,
+        observaciones,
         videoUrl,
       };
     } catch (_) {

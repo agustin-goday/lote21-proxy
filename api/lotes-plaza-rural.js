@@ -13,6 +13,9 @@ export default async function handler(req, res) {
 
   const ESCRITORIO_ID = 7; // Aramburu
 
+  // ID interno = número de remate - 248 (321→73, 322→74)
+  const idInterno = parseInt(remate) - 248;
+
   // Categorías de Plaza Rural con sus IDs
   const CATEGORIAS = [
     { id: 15, nombre: "Terneros" },
@@ -39,7 +42,7 @@ export default async function handler(req, res) {
   // Obtener lotes por categoría
   for (const cat of CATEGORIAS) {
     try {
-      const url = `https://plazarural.com.uy/table-categoria/${remate}/${cat.id}?escritorio_id=${ESCRITORIO_ID}&&&&&`;
+      const url = `https://plazarural.com.uy/table-categoria/${idInterno}/${cat.id}?escritorio_id=${ESCRITORIO_ID}&&&&&`;
       const r = await fetch(url, { headers });
       if (!r.ok) continue;
       const html = await r.text();

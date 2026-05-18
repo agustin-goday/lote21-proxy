@@ -41,7 +41,7 @@ export default async function handler(req, res) {
         const actual = lote.actual === "1" || lote.actual === 1;
 
         if (!grupos[cat]) {
-          grupos[cat] = { categoria: cat, orden, todos: [], actuales: [] };
+          grupos[cat] = { categoria: cat, orden, todos: [], actuales: [], tipoventa: lote.tipo_venta || "kilo" };
         }
         // Todos los registros para max/min
         if (!isNaN(precio)) grupos[cat].todos.push({ precio, peso });
@@ -65,9 +65,14 @@ export default async function handler(req, res) {
             ? (actuales.reduce((s, x) => s + x.precio, 0) / n)
             : (todos.reduce((s, x) => s + x, 0) / todos.length);
 
-          // Bulto = promedio de (precio * peso) de actual=1
+          // Bulto:
+          // - vendido por kilo: promedio de (precio * peso)
+          // - vendido por cabeza: promedio del precio (igual que Lote21)
+          const esPorCabeza = g.tipoventa === "cabeza";
           const bulto = n > 0
-            ? actuales.reduce((s, x) => s + x.precio * x.peso, 0) / n
+            ? esPorCabeza
+              ? actuales.reduce((s, x) => s + x.precio, 0) / n
+              : actuales.reduce((s, x) => s + x.precio * x.peso, 0) / n
             : null;
 
           return {

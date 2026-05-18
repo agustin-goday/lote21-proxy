@@ -19,16 +19,18 @@ export default async function handler(req, res) {
   // Categorías de Plaza Rural con sus IDs
   const CATEGORIAS = [
     { id: 15, nombre: "Terneros" },
-    { id: 14, nombre: "Terneras" },
-    { id: 13, nombre: "Novillos 1-2 años" },
-    { id: 12, nombre: "Novillos 2-3 años" },
-    { id: 11, nombre: "Novillos +3 años" },
-    { id: 8,  nombre: "Vaquillonas 1-2 años" },
-    { id: 7,  nombre: "Vaquillonas +2 años" },
-    { id: 16, nombre: "Vacas de Invernada" },
-    { id: 3,  nombre: "Vientres Preñados" },
-    { id: 4,  nombre: "Vientres Entorados" },
-    { id: 1,  nombre: "Toros" },
+    { id: 3,  nombre: "Terneras" },
+    { id: 6,  nombre: "Terneros/as" },
+    { id: 14, nombre: "Novillos 1-2 años" },
+    { id: 13, nombre: "Novillos 2-3 años" },
+    { id: 7,  nombre: "Vacas de Invernada" },
+    { id: 2,  nombre: "Vaquillonas 1-2 años" },
+    { id: 1,  nombre: "Vaquillonas +2 años" },
+    { id: 4,  nombre: "Vientres Preñados" },
+    { id: 5,  nombre: "Vientres Entorados" },
+    { id: 9,  nombre: "Piezas de Cría" },
+    { id: 35, nombre: "Más de 1 año enteros" },
+    { id: 8,  nombre: "Toros" },
   ];
 
   const headers = {

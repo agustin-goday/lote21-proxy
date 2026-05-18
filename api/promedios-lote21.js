@@ -66,14 +66,19 @@ export default async function handler(req, res) {
             : (todos.reduce((s, x) => s + x, 0) / todos.length);
 
           // Bulto:
-          // - vendido por kilo: promedio de (precio * peso)
+          // - vendido por kilo: promedio_precio_actuales × promedio_peso_actuales
           // - vendido por cabeza: promedio del precio (igual que Lote21)
           const esPorCabeza = g.tipoventa === "cabeza";
-          const bulto = n > 0
-            ? esPorCabeza
-              ? actuales.reduce((s, x) => s + x.precio, 0) / n
-              : actuales.reduce((s, x) => s + x.precio * x.peso, 0) / n
-            : null;
+          let bulto = null;
+          if (n > 0) {
+            if (esPorCabeza) {
+              bulto = actuales.reduce((s, x) => s + x.precio, 0) / n;
+            } else {
+              const promPrecio = actuales.reduce((s, x) => s + x.precio, 0) / n;
+              const promPeso   = actuales.reduce((s, x) => s + x.peso, 0) / n;
+              bulto = promPrecio * promPeso;
+            }
+          }
 
           return {
             categoria: g.categoria,
@@ -85,6 +90,29 @@ export default async function handler(req, res) {
           };
         })
         .filter(Boolean);
+
+      // Agregar "Terneros generales" — suma de todas subcategorías de terneros
+      const subcatsTerneros = ["Terneros hasta 140 kg", "Terneros 141 a 180 kg", "Terneros más de 180 kg"];
+      const lotesTerneros = lotes.filter(l => subcatsTerneros.includes(l.categoria));
+      if (lotesTerneros.length > 0) {
+        const actualesTern = lotesTerneros.filter(l => l.actual === "1" || l.actual === 1);
+        const todosTern    = lotesTerneros.map(l => parseFloat(String(l.Costo_final).replace(",",".")));
+        const nT = actualesTern.length;
+        if (nT > 0) {
+          const promPrecioT = actualesTern.reduce((s,l) => s + parseFloat(String(l.Costo_final).replace(",",".")), 0) / nT;
+          const promPesoT   = actualesTern.reduce((s,l) => s + parseFloat(l.Pesada_final), 0) / nT;
+          const ternGeneral = {
+            categoria: "Terneros generales",
+            maximo:    todosTern.length ? Math.max(...todosTern).toFixed(2) : null,
+            minimo:    todosTern.length ? Math.min(...todosTern).toFixed(2) : null,
+            promedio:  promPrecioT.toFixed(2),
+            bulto:     (promPrecioT * promPesoT).toFixed(2),
+            cabezas:   nT,
+          };
+          // Insertar al inicio
+          categorias.unshift(ternGeneral);
+        }
+      }
 
       return res.status(200).json({ ok: true, remate, ano, categorias });
 

@@ -43,10 +43,9 @@ export default async function handler(req, res) {
         if (!grupos[cat]) {
           grupos[cat] = { categoria: cat, orden, todos: [], actuales: [], tipoventa: lote.tipo_venta || "kilo" };
         }
-        // Todos los registros para max/min
-        if (!isNaN(precio)) grupos[cat].todos.push({ precio, peso });
-        // Solo actual=1 para promedio y bulto
+        // Solo actual=1 para todo (max, min, promedio, bulto) — igual que Lote21
         if (actual && !isNaN(precio) && !isNaN(peso)) {
+          grupos[cat].todos.push({ precio, peso });
           grupos[cat].actuales.push({ precio, peso });
         }
       }
@@ -80,13 +79,16 @@ export default async function handler(req, res) {
             }
           }
 
+          // Solo mostrar categorías con al menos un actual=1
+          if (n === 0) return null;
+
           return {
             categoria: g.categoria,
             maximo:    todos.length ? Math.max(...todos).toFixed(2) : null,
             minimo:    todos.length ? Math.min(...todos).toFixed(2) : null,
             promedio:  promedio.toFixed(2),
             bulto:     bulto ? bulto.toFixed(2) : null,
-            cabezas:   n || todos.length,
+            cabezas:   n,
           };
         })
         .filter(Boolean);
@@ -96,7 +98,7 @@ export default async function handler(req, res) {
       const lotesTerneros = lotes.filter(l => subcatsTerneros.includes(l.categoria));
       if (lotesTerneros.length > 0) {
         const actualesTern = lotesTerneros.filter(l => l.actual === "1" || l.actual === 1);
-        const todosTern    = lotesTerneros.map(l => parseFloat(String(l.Costo_final).replace(",",".")));
+        const todosTern    = actualesTern.map(l => parseFloat(String(l.Costo_final).replace(",",".")));
         const nT = actualesTern.length;
         if (nT > 0) {
           const promPrecioT = actualesTern.reduce((s,l) => s + parseFloat(String(l.Costo_final).replace(",",".")), 0) / nT;

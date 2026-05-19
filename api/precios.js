@@ -1,4 +1,5 @@
-// api/precios.js — con Upstash KV para semana anterior
+// api/precios.js — Scraper de precios de ganado desde acg.com.uy
+// con KV Storage para semana anterior
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -12,90 +13,100 @@ export default async function handler(req, res) {
     return m ? m[1].replace(",", ".") : null;
   }
 
-  // Probar todos los posibles nombres de variables que Upstash/Vercel puede usar
-  const KV_URL   = process.env.STORAGE_KV_REST_API_URL
-                || process.env.KV_REST_API_URL
-                || process.env.UPSTASH_REDIS_REST_URL
-                || process.env.REDIS_URL;
-
-  const KV_TOKEN = process.env.STORAGE_KV_REST_API_TOKEN
-                || process.env.KV_REST_API_TOKEN
-                || process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  async function kvGet(key) {
-    if (!KV_URL || !KV_TOKEN) return null;
-    try {
-      const r = await fetch(`${KV_URL}/get/${key}`, {
-        headers: { Authorization: `Bearer ${KV_TOKEN}` }
-      });
-      const d = await r.json();
-      if (!d.result) return null;
-      // Upstash puede devolver doble-serializado
-      let val = d.result;
-      if (typeof val === "string") val = JSON.parse(val);
-      if (typeof val === "string") val = JSON.parse(val);
-      return val;
-    } catch(e) { return null; }
-  }
-
-  async function kvSet(key, value) {
-    if (!KV_URL || !KV_TOKEN) return false;
-    try {
-      const r = await fetch(`${KV_URL}/set/${key}`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${KV_TOKEN}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(value)
-      });
-      return r.ok;
-    } catch(e) { return false; }
-  }
-
   try {
-    // Scrape ACG home
-    const homeRes = await fetch("https://acg.com.uy/", {
-      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
+    const response = await fetch("https://acg.com.uy/", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml",
+        "Accept-Language": "es-UY,es;q=0.9",
+      },
     });
-    const homeHtml = await homeRes.text();
-    const t = homeHtml.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    const semana     = t.match(/semana\s+N[°º]\s*(\d+)/i)?.[1] || null;
-    const novillo    = extraer(t, /Novillo[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const vaca       = extraer(t, /Vaca[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const vaquillona = extraer(t, /Vaquillona[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
-    const ternero       = extraer(t, /Ternero[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const ternera       = extraer(t, /Ternera[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const vacaInvernada = extraer(t, /Vaca de Invernada[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
-    const bovinos    = extraer(t, /Faena semanal\s*([\d.,]+)\s*vacunos/i);
-    const bovinosAnt = extraer(t, /vacunos\s*([\d.,]+)\s*semana anterior/i);
-    const ovinos     = extraer(t, /Faena semanal[\s\S]{0,300}?([\d.,]+)\s*ovinos/i);
-    const ovinosAnt  = extraer(t, /ovinos\s*([\d.,]+)\s*semana anterior/i);
+    const html = await response.text();
+    const texto = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
-    // Leer semana anterior desde KV
-    const guardado = await kvGet("acg_precios_anteriores");
-    let novilloAnt    = guardado?.novillo    || null;
-    let vacaAnt       = guardado?.vaca       || null;
-    let vaquillonaAnt = guardado?.vaquillona || null;
-    const semanaGuardada = guardado?.semana  || null;
+    // Semana y período de fechas
+    // Ejemplo en página: "Precios de la semana N°20 (del 12/05/2026 - 18/05/2026)"
+    const semanaMatch = texto.match(/semana\s*N[°º]\s*(\d+)\s*\(del\s*([^)]+)\)/i);
+    const semana  = semanaMatch ? semanaMatch[1] : null;
+    const periodo = semanaMatch ? semanaMatch[2].trim() : null;
 
-    // El guardado se hace SOLO desde el cron job — nunca desde aquí
+    // Ganado gordo
+    const novillo    = extraer(texto, /Novillo[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+    const vaca       = extraer(texto, /Vaca[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+    const vaquillona = extraer(texto, /Vaquillona[\s\S]{0,300}?([\d,]+)\s*D[oó]lares por kilo en cuarta balanza/i);
+
+    // Reposición
+    const ternero       = extraer(texto, /Ternero[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+    const ternera       = extraer(texto, /Ternera[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+    const vacaInvernada = extraer(texto, /Vaca de Invernada[\s\S]{0,200}?([\d,]+)\s*D[oó]lares por kilo en pie/i);
+
+    // Faena semanal
+    const bovinos    = extraer(texto, /Faena semanal\s*([\d.,]+)\s*vacunos/i);
+    const bovinosAnt = extraer(texto, /vacunos\s*([\d.,]+)\s*semana anterior/i);
+    const ovinos     = extraer(texto, /Faena semanal[\s\S]{0,200}?([\d.,]+)\s*ovinos/i);
+    const ovinosAnt  = extraer(texto, /ovinos\s*([\d.,]+)\s*semana anterior/i);
+
+    // KV: leer semana anterior guardada
+    let novilloAnt = null, vacaAnt = null, vaquillonaAnt = null;
+    let semanaAnteriorGuardada = null;
+    let kvConectado = false;
+    let kvUrl = null;
+
+    try {
+      kvUrl = process.env.KV_REST_API_URL;
+      const kvToken = process.env.KV_REST_API_TOKEN;
+      if (kvUrl && kvToken) {
+        kvConectado = true;
+        const kvRes = await fetch(`${kvUrl}/get/precios_semana_anterior`, {
+          headers: { Authorization: `Bearer ${kvToken}` }
+        });
+        const kvData = await kvRes.json();
+        if (kvData.result) {
+          const ant = JSON.parse(kvData.result);
+          novilloAnt    = ant.novillo    || null;
+          vacaAnt       = ant.vaca       || null;
+          vaquillonaAnt = ant.vaquillona || null;
+          semanaAnteriorGuardada = ant.semana || null;
+        }
+
+        // Guardar semana actual solo si es una semana nueva
+        const semNum = parseInt(semana || "0");
+        const semGuardadaNum = parseInt(semanaAnteriorGuardada || "0");
+        if (semNum > semGuardadaNum && novillo && vaca && vaquillona) {
+          await fetch(`${kvUrl}/set/precios_semana_anterior`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${kvToken}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(JSON.stringify({
+              semana, novillo, vaca, vaquillona
+            }))
+          });
+        }
+      }
+    } catch (_) {}
 
     return res.status(200).json({
       ok: true,
       semana,
-      gordos: { novillo, novilloAnt, vaca, vacaAnt, vaquillona, vaquillonaAnt },
+      periodo,
+      gordos: {
+        novillo,    novilloAnt,
+        vaca,       vacaAnt,
+        vaquillona, vaquillonaAnt,
+      },
       reposicion: { ternero, ternera, vacaInvernada },
       faena: {
-        bovinos:    bovinos?.replace(/\./g,"")    || null,
-        bovinosAnt: bovinosAnt?.replace(/\./g,"") || null,
-        ovinos:     ovinos?.replace(/\./g,"")     || null,
-        ovinosAnt:  ovinosAnt?.replace(/\./g,"")  || null,
+        bovinos:    bovinos    ? bovinos.replace(".", "")    : null,
+        bovinosAnt: bovinosAnt ? bovinosAnt.replace(".", "") : null,
+        ovinos:     ovinos     ? ovinos.replace(".", "")     : null,
+        ovinosAnt:  ovinosAnt  ? ovinosAnt.replace(".", "")  : null,
       },
-      semanaAnteriorGuardada: semanaGuardada,
-      kvConectado: !!(KV_URL && KV_TOKEN),
-      kvUrl: KV_URL ? KV_URL.substring(0, 30) + "..." : "no encontrada",
+      semanaAnteriorGuardada,
+      kvConectado,
+      kvUrl: kvUrl ? kvUrl.substring(0, 35) + "..." : null,
       timestamp: new Date().toISOString(),
     });
 

@@ -67,7 +67,16 @@ export default async function handler(req, res) {
         (x.match(/<title><!\[CDATA\[([\s\S]*?)\]\]><\/title>/) ||
          x.match(/<title>([\s\S]*?)<\/title>/))?.[1]?.trim() || ""
       );
-      if (EXCLUIR.some(p => titulo.toLowerCase().includes(p))) continue;
+
+      // Filtrar por título Y contenido
+      const resumenRaw = decodeHtml(
+        (x.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) ||
+         x.match(/<description>([\s\S]*?)<\/description>/))?.[1]
+          ?.replace(/<[^>]+>/g," ")?.replace(/\s+/g," ")?.trim() || ""
+      );
+      const contenidoRaw = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || "";
+      const textoCompleto = (titulo + " " + resumenRaw + " " + contenidoRaw).toLowerCase();
+      if (EXCLUIR.some(p => textoCompleto.includes(p))) continue;
 
       const link = x.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ||
                    x.match(/<guid[^>]*>([\s\S]*?)<\/guid>/)?.[1]?.trim() || "";
@@ -102,7 +111,7 @@ export default async function handler(req, res) {
       ).substring(0, 250);
 
       rawItems.push({ titulo, link, fecha, autor, imagen, resumen, contenido });
-      if (rawItems.length >= 4) break;
+      if (rawItems.length >= 8) break;
     }
 
     // Buscar og:image solo para los que no tienen imagen, con timeout individual

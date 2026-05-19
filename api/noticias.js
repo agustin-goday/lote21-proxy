@@ -10,12 +10,12 @@ export default async function handler(req, res) {
   function decodeHtml(str) {
     if (!str) return "";
     return str
-      .replace(/&aacute;/gi,"a").replace(/&eacute;/gi,"e")
-      .replace(/&iacute;/gi,"i").replace(/&oacute;/gi,"o")
-      .replace(/&uacute;/gi,"u").replace(/&ntilde;/gi,"n")
-      .replace(/&Aacute;/gi,"A").replace(/&Eacute;/gi,"E")
-      .replace(/&Iacute;/gi,"I").replace(/&Oacute;/gi,"O")
-      .replace(/&Uacute;/gi,"U").replace(/&Ntilde;/gi,"N")
+      .replace(/&aacute;/gi,"á").replace(/&eacute;/gi,"é")
+      .replace(/&iacute;/gi,"í").replace(/&oacute;/gi,"ó")
+      .replace(/&uacute;/gi,"ú").replace(/&ntilde;/gi,"ñ")
+      .replace(/&Aacute;/gi,"Á").replace(/&Eacute;/gi,"É")
+      .replace(/&Iacute;/gi,"Í").replace(/&Oacute;/gi,"Ó")
+      .replace(/&Uacute;/gi,"Ú").replace(/&Ntilde;/gi,"Ñ")
       .replace(/&amp;/gi,"&").replace(/&quot;/gi,'"')
       .replace(/&lt;/gi,"<").replace(/&gt;/gi,">")
       .replace(/&nbsp;/gi," ").replace(/&mdash;/gi,"\u2014")
@@ -48,6 +48,26 @@ export default async function handler(req, res) {
     } catch(_) { return null; }
   }
 
+  // Limpia el HTML del contenido para mostrarlo en el popup
+  function limpiarContenido(html) {
+    if (!html) return "";
+    return html
+      // Eliminar scripts y estilos inline
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      // Eliminar bloques de compartir/relacionados típicos de WordPress
+      .replace(/<div[^>]+class="[^"]*sharedaddy[^"]*"[\s\S]*?<\/div>\s*<\/div>/gi, "")
+      .replace(/<div[^>]+class="[^"]*jp-relatedposts[^"]*"[\s\S]*?<\/div>/gi, "")
+      // Eliminar atributos de estilo y clase para no romper el layout del popup
+      .replace(/ style="[^"]*"/gi, "")
+      // Asegurar que las imágenes no tengan ancho fijo
+      .replace(/<img([^>]*)>/gi, function(_, attrs) {
+        attrs = attrs.replace(/ width="[^"]*"/gi, "").replace(/ height="[^"]*"/gi, "");
+        return `<img${attrs} style="max-width:100%;height:auto;">`;
+      })
+      .trim();
+  }
+
   const EXCLUIR = ["plaza rural", "pantalla uruguay"];
 
   async function parseFeed(xml, fuenteDefault) {
@@ -76,7 +96,10 @@ export default async function handler(req, res) {
          x.match(/<description>([\s\S]*?)<\/description>/))?.[1]
           ?.replace(/<[^>]+>/g," ")?.replace(/\s+/g," ")?.trim() || ""
       );
+
+      // Contenido completo del artículo (WordPress lo incluye en content:encoded)
       const contenidoRaw = x.match(/<content:encoded><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>/)?.[1] || "";
+
       const textoCompleto = (titulo + " " + resumenRaw + " " + contenidoRaw).toLowerCase();
       if (EXCLUIR.some(p => textoCompleto.includes(p))) continue;
 
@@ -100,7 +123,11 @@ export default async function handler(req, res) {
       }
 
       const resumen = resumenRaw.substring(0, 250);
-      items.push({ titulo, link, fecha, autor, imagen, resumen, fuente: fuenteDefault });
+
+      // contenido: HTML limpio del artículo completo, o vacío si el feed no lo trae
+      const contenido = contenidoRaw ? limpiarContenido(contenidoRaw) : "";
+
+      items.push({ titulo, link, fecha, autor, imagen, resumen, contenido, fuente: fuenteDefault });
     }
     return items;
   }
@@ -126,15 +153,8 @@ export default async function handler(req, res) {
 
     if (resElPaisRaw.status === "fulfilled") {
       const xml = await resElPaisRaw.value.text();
-      console.log("ElPais feed length:", xml.length, "status:", resElPaisRaw.value.status);
-      const itemCount = (xml.match(/<item>/gi) || []).length;
-      const sampleLink = (xml.match(/<link>([\s\S]*?)<\/link>/)?.[1] || "no link").replace(/\s+/g,"");
-      console.log("ElPais items in XML:", itemCount, "sampleLink:", sampleLink.substring(0,80));
       const items = await parseFeed(xml, "El País Rurales");
-      console.log("ElPais items found:", items.length);
       rawItems.push(...items.slice(0, 4));
-    } else {
-      console.log("ElPais fetch failed:", resElPaisRaw.reason?.message);
     }
 
     // Ordenar por fecha desc y limitar a 8

@@ -123,8 +123,12 @@ export default async function handler(req, res) {
 
     if (resElPaisRaw.status === "fulfilled") {
       const xml = await resElPaisRaw.value.text();
+      console.log("ElPais feed length:", xml.length, "status:", resElPaisRaw.value.status);
       const items = await parseFeed(xml, "El País Rurales");
+      console.log("ElPais items found:", items.length);
       rawItems.push(...items.slice(0, 4));
+    } else {
+      console.log("ElPais fetch failed:", resElPaisRaw.reason?.message);
     }
 
     // Ordenar por fecha desc y limitar a 8

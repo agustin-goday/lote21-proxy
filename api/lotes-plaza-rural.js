@@ -85,6 +85,10 @@ export default async function handler(req, res) {
             : "#6c757d")
           : null;
 
+        // Extraer precio de venta
+        const precioMatch = html.match(new RegExp(`data-view-lote="${loteId}">\\s*([\\d.,]+\\s*USD)\\s*<\\/td>`));
+        const precioVenta = precioMatch ? precioMatch[1].trim() : null;
+
         lotesTodos.push({
           id: loteId,
           nro,
@@ -97,6 +101,7 @@ export default async function handler(req, res) {
           preoferta,
           preofertaTitulo,
           preofertaColor,
+          precioVenta,
           videoUrl: null, // se obtiene del modal
         });
       }
@@ -141,6 +146,7 @@ export default async function handler(req, res) {
         preoferta:     lote.preoferta,
         preofertaTitulo: lote.preofertaTitulo,
         preofertaColor: lote.preofertaColor,
+        precioVenta:    lote.precioVenta,
         videoUrl,
       };
     } catch (_) {

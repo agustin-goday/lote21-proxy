@@ -74,6 +74,11 @@ export default async function handler(req, res) {
         const dptMatch = html.match(new RegExp(`data-view-lote="${loteId}">(\\w[^<]{2,30})<\\/td>\\s*<td data-view-lote="${loteId}" style`));
         const departamento = dptMatch ? dptMatch[1].trim() : null;
 
+        // Extraer preoferta
+        const preofertaMatch = html.match(new RegExp(`data-view-lote="${loteId}"[^>]*>\\s*<span class="badge[^"]*"[^>]*title="([^"]*)"[^>]*>([^<]+)<\\/span>`));
+        const preoferta = preofertaMatch ? preofertaMatch[2].trim() : null;
+        const preofertaTitulo = preofertaMatch ? preofertaMatch[1] : null;
+
         lotesTodos.push({
           id: loteId,
           nro,
@@ -83,6 +88,8 @@ export default async function handler(req, res) {
           peso,
           raza,
           departamento,
+          preoferta,
+          preofertaTitulo,
           videoUrl: null, // se obtiene del modal
         });
       }
@@ -124,6 +131,8 @@ export default async function handler(req, res) {
         departamento:  dptMatch   ? dptMatch[1].trim()   : lote.departamento,
         establecimiento: estabMatch ? estabMatch[1].trim() : null,
         observaciones,
+        preoferta:     lote.preoferta,
+        preofertaTitulo: lote.preofertaTitulo,
         videoUrl,
       };
     } catch (_) {

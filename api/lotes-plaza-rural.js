@@ -74,10 +74,16 @@ export default async function handler(req, res) {
         const dptMatch = html.match(new RegExp(`data-view-lote="${loteId}">(\\w[^<]{2,30})<\\/td>\\s*<td data-view-lote="${loteId}" style`));
         const departamento = dptMatch ? dptMatch[1].trim() : null;
 
-        // Extraer preoferta
-        const preofertaMatch = html.match(new RegExp(`data-view-lote="${loteId}"[^>]*>\\s*<span class="badge[^"]*"[^>]*title="([^"]*)"[^>]*>([^<]+)<\\/span>`));
-        const preoferta = preofertaMatch ? preofertaMatch[2].trim() : null;
-        const preofertaTitulo = preofertaMatch ? preofertaMatch[1] : null;
+        // Extraer preoferta (color según estado)
+        const preofertaMatch = html.match(new RegExp(`data-view-lote="${loteId}"[^>]*>\\s*<span class="badge([^"]*)"[^>]*title="([^"]*)"[^>]*>([^<]+)<\\/span>`));
+        const preoferta = preofertaMatch ? preofertaMatch[3].trim() : null;
+        const preofertaTitulo = preofertaMatch ? preofertaMatch[2] : null;
+        const preofertaColor = preofertaMatch
+          ? (preofertaMatch[1].includes("success") ? "#28a745"
+            : preofertaMatch[1].includes("warning") ? "#fd7e14"
+            : preofertaMatch[1].includes("danger")  ? "#dc3545"
+            : "#6c757d")
+          : null;
 
         lotesTodos.push({
           id: loteId,
@@ -90,6 +96,7 @@ export default async function handler(req, res) {
           departamento,
           preoferta,
           preofertaTitulo,
+          preofertaColor,
           videoUrl: null, // se obtiene del modal
         });
       }
@@ -133,6 +140,7 @@ export default async function handler(req, res) {
         observaciones,
         preoferta:     lote.preoferta,
         preofertaTitulo: lote.preofertaTitulo,
+        preofertaColor: lote.preofertaColor,
         videoUrl,
       };
     } catch (_) {

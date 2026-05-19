@@ -62,11 +62,14 @@ export default async function handler(req, res) {
       );
       if (!titulo) continue;
 
-      const link = x.match(/<link>([\s\S]*?)<\/link>/)?.[1]?.trim() ||
-                   x.match(/<guid[^>]*>([\s\S]*?)<\/guid>/)?.[1]?.trim() || "";
+      const link = (x.match(/<link>([\s\S]*?)<\/link>/)?.[1] ||
+                   x.match(/<guid[^>]*>([\s\S]*?)<\/guid>/)?.[1] || "").replace(/\s+/g, "");
 
       // Para El País: solo noticias de rurales.elpais.com.uy
-      if (fuenteDefault === "El País Rurales" && !link.includes("rurales.elpais.com.uy")) continue;
+      if (fuenteDefault === "El País Rurales") {
+        const linkClean = link.replace(/\s+/g, "");
+        if (!linkClean.includes("rurales.elpais.com.uy")) continue;
+      }
 
       const resumenRaw = decodeHtml(
         (x.match(/<description><!\[CDATA\[([\s\S]*?)\]\]><\/description>/) ||
@@ -124,6 +127,9 @@ export default async function handler(req, res) {
     if (resElPaisRaw.status === "fulfilled") {
       const xml = await resElPaisRaw.value.text();
       console.log("ElPais feed length:", xml.length, "status:", resElPaisRaw.value.status);
+      const itemCount = (xml.match(/<item>/gi) || []).length;
+      const sampleLink = (xml.match(/<link>([\s\S]*?)<\/link>/)?.[1] || "no link").replace(/\s+/g,"");
+      console.log("ElPais items in XML:", itemCount, "sampleLink:", sampleLink.substring(0,80));
       const items = await parseFeed(xml, "El País Rurales");
       console.log("ElPais items found:", items.length);
       rawItems.push(...items.slice(0, 4));

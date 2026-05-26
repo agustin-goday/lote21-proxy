@@ -1,7 +1,7 @@
-// api/remate.js — Vercel Serverless Function
-// Soporta fechas en mayúsculas y minúsculas (ej: "MARTES, 9 DE JUNIO" o "martes, 21 de mayo")
+// api/remate.js — Vercel Serverless Function (CommonJS)
+// Soporta fechas en mayúsculas y minúsculas
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=60");
@@ -27,12 +27,11 @@ export default async function handler(req, res) {
     const textoLimpio = html
       .replace(/<[^>]+>/g, " ")
       .replace(/&nbsp;/g, " ")
-      .replace(/\u00a0/g, " ")         // non-breaking space unicode
+      .replace(/\u00a0/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
-    // Regex flexible: captura "DIA 1: MARTES, 9 DE JUNIO - 09:00" o "DIA 1: jueves, 21 de mayo - 09:00"
-    // Acepta letras con tildes, coma, números, espacios, guión y dos puntos en la hora
+    // Regex flexible: acepta "MARTES, 9 DE JUNIO - 09:00" y "martes, 21 de mayo - 09:00"
     const diasMatches = [
       ...textoLimpio.matchAll(
         /DIA\s+(\d+)\s*:\s*([\wáéíóúüñÁÉÍÓÚÜÑ]+,\s*\d+\s+(?:DE\s+)?[\wáéíóúüñÁÉÍÓÚÜÑ]+\s*[-–]\s*\d{1,2}:\d{2})/gi
@@ -44,7 +43,7 @@ export default async function handler(req, res) {
       descripcion: m[2].trim(),
     }));
 
-    // Fallback: PRÓXIMO REMATE (para cuando hay un solo día sin formato DIA N:)
+    // Fallback: PRÓXIMO REMATE
     const proximoMatch = textoLimpio.match(
       /PRÓXIMO REMATE\s+([\wáéíóúüñÁÉÍÓÚÜÑ,\s]+\d+:\d{2})/i
     );
@@ -70,6 +69,7 @@ export default async function handler(req, res) {
       proximoRemate,
       timestamp: new Date().toISOString(),
     });
+
   } catch (err) {
     return res.status(500).json({
       ok: false,
@@ -77,4 +77,4 @@ export default async function handler(req, res) {
       timestamp: new Date().toISOString(),
     });
   }
-}
+};

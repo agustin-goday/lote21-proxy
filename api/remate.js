@@ -1,9 +1,10 @@
 // api/remate.js — Vercel Serverless Function
+// Soporta fechas en mayúsculas y minúsculas (ej: "MARTES, 9 DE JUNIO" o "martes, 21 de mayo")
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=60");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
@@ -18,40 +19,46 @@ export default async function handler(req, res) {
 
     const html = await response.text();
 
-    // Número de remate
-    const numeroMatch = html.match(/Remate\s+(\d+)/i);
+    // Extraer número de remate
+    const numeroMatch = html.match(/Remate\s+n?°?\s*(\d+)/i);
     const numero = numeroMatch ? numeroMatch[1] : null;
 
-    // Limpiar HTML
-    const texto = html
+    // Limpiar HTML: quitar tags, normalizar espacios y &nbsp;
+    const textoLimpio = html
       .replace(/<[^>]+>/g, " ")
       .replace(/&nbsp;/g, " ")
-      .replace(/\s+/g, " ");
+      .replace(/\u00a0/g, " ")         // non-breaking space unicode
+      .replace(/\s+/g, " ")
+      .trim();
 
-    // Estrategia: buscar todas las fechas con formato "dia_semana, DD de mes - HH:MM"
-    // Ej: "jueves, 21 de mayo - 09:00" o "viernes, 22 de mayo - 09:00"
-    const diasSemana = "lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo";
-    const meses = "enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre";
-    const regexFecha = new RegExp(
-      `((?:${diasSemana}),?\\s*\\d{1,2}\\s+de\\s+(?:${meses})\\s*[-–]\\s*\\d{1,2}:\\d{2})`,
-      "gi"
+    // Regex flexible: captura "DIA 1: MARTES, 9 DE JUNIO - 09:00" o "DIA 1: jueves, 21 de mayo - 09:00"
+    // Acepta letras con tildes, coma, números, espacios, guión y dos puntos en la hora
+    const diasMatches = [
+      ...textoLimpio.matchAll(
+        /DIA\s+(\d+)\s*:\s*([\wáéíóúüñÁÉÍÓÚÜÑ]+,\s*\d+\s+(?:DE\s+)?[\wáéíóúüñÁÉÍÓÚÜÑ]+\s*[-–]\s*\d{1,2}:\d{2})/gi
+      ),
+    ];
+
+    const dias = diasMatches.map((m) => ({
+      dia: m[1].trim(),
+      descripcion: m[2].trim(),
+    }));
+
+    // Fallback: PRÓXIMO REMATE (para cuando hay un solo día sin formato DIA N:)
+    const proximoMatch = textoLimpio.match(
+      /PRÓXIMO REMATE\s+([\wáéíóúüñÁÉÍÓÚÜÑ,\s]+\d+:\d{2})/i
     );
+    const proximoRemate =
+      proximoMatch
+        ? proximoMatch[1].trim()
+        : dias.length > 0
+        ? dias[0].descripcion
+        : null;
 
-    const fechasEncontradas = [...texto.matchAll(regexFecha)].map(m => m[1].trim());
-
-    // Deduplicar
-    const fechasUnicas = [...new Set(fechasEncontradas)];
-
-    // Construir dias
-    const dias = fechasUnicas.map((f, i) => ({ dia: String(i + 1), descripcion: f }));
-
-    // proximoRemate = primera fecha
-    const proximoRemate = fechasUnicas[0] || null;
-
-    if (!numero && dias.length === 0) {
+    if (!numero && dias.length === 0 && !proximoRemate) {
       return res.status(200).json({
         ok: false,
-        error: "No se encontraron datos",
+        error: "No se encontraron datos del remate",
         timestamp: new Date().toISOString(),
       });
     }
@@ -63,8 +70,11 @@ export default async function handler(req, res) {
       proximoRemate,
       timestamp: new Date().toISOString(),
     });
-
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({
+      ok: false,
+      error: err.message,
+      timestamp: new Date().toISOString(),
+    });
   }
 }

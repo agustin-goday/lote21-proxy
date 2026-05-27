@@ -49,8 +49,18 @@ export default async function handler(req, res) {
         const anio = parseInt(fechaMatch[3]);
         const fechaRemate = new Date(anio, mes - 1, dia);
 
-        if (fechaRemate >= hoy) {
-          // Este es el próximo remate
+        // Buscar la última fecha del remate (para remates de 2 días)
+        const todasFechas = [...texto.matchAll(
+          /(?:Lunes|Martes|Mi[eé]rcoles|Jueves|Viernes|S[aá]bado|Domingo)\s+(\d+)\s*[·\-]\s*(?:.*?)\s*(Enero|Febrero|Marzo|Abril|Mayo|Junio|Julio|Agosto|Septiembre|Octubre|Noviembre|Diciembre)\s+(\d{4})/gi
+        )];
+        let fechaFin = fechaRemate;
+        for (const fm of todasFechas) {
+          const d = new Date(parseInt(fm[3]), MESES[fm[2].toLowerCase()] - 1, parseInt(fm[1]));
+          if (d > fechaFin) fechaFin = d;
+        }
+
+        if (fechaFin >= hoy) {
+          // Este es el remate actual o próximo
           const fechaCompleta = texto.match(
             /((?:Lunes|Martes|Mi[eé]rcoles|Jueves|Viernes|S[aá]bado|Domingo)\s+\d+\s*[·\-]\s*(?:.*?)\d{4})/i
           )?.[1]?.replace(/\s+/g, " ").trim();

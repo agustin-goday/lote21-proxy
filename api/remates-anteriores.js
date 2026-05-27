@@ -1,33 +1,27 @@
-// api/remates-anteriores.js — Lista los últimos remates de Plaza Rural con Aramburu
+// api/remates-anteriores.js — Lista remates anteriores al remate actual de Aramburu
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Cache-Control", "s-maxage=86400, stale-while-revalidate"); // cache 24hs
+  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    // Leer página de remates para obtener el número actual
-    const listRes = await fetch("https://plazarural.com.uy/remates", {
+    // Usar el mismo endpoint de plazarural para saber cuál es el remate actual
+    // Así ambos widgets están perfectamente sincronizados
+    const actualRes = await fetch("https://lote21-proxy.vercel.app/api/plazarural", {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
     });
-    const listHtml = await listRes.text();
-    const numeroMatch = listHtml.match(/\/remates\/(\d+)/);
-    const numeroActual = numeroMatch ? parseInt(numeroMatch[1]) : null;
-    if (!numeroActual) throw new Error("No se encontró número de remate");
+    const actualData = await actualRes.json();
 
-    // Obtener el número del próximo remate de Aramburu desde el proxy
-    const aramburuRes = await fetch("https://lote21-proxy.vercel.app/api/plazarural", {
-      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
-    });
-    const aramburuData = await aramburuRes.json();
-    const numeroAramburu = aramburuData.ok ? parseInt(aramburuData.numero) : null;
+    if (!actualData.ok || !actualData.numero) {
+      throw new Error("No se pudo obtener el remate actual");
+    }
 
-    // Usar el número de Aramburu como base — los anteriores son los remates ya pasados
-    const base = numeroAramburu || numeroActual;
+    const base = parseInt(actualData.numero);
 
-    // Generar lista de últimos 10 remates anteriores al de Aramburu
+    // Generar lista de los 10 remates anteriores al actual
     const remates = [];
     for (let i = 1; i <= 10; i++) {
       const num = base - i;

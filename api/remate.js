@@ -1,66 +1,56 @@
-// api/remate.js — Vercel Serverless Function (CommonJS)
-// Soporta fechas en mayúsculas y minúsculas
-
-module.exports = async function handler(req, res) {
+// api/remate.js — Próximo remate de Lote21 leyendo archivos .ics
+export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Cache-Control", "s-maxage=300, stale-while-revalidate=60");
-
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    const response = await fetch("https://www.lote21.uy/vivo/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "es-UY,es;q=0.9",
-      },
-    });
+    // 1. Leer la página principal para extraer el número de remate actual
+    const html = await fetch("https://www.lote21.uy/vivo/", {
+      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", Accept: "text/html" },
+    }).then(r => r.text());
 
-    const html = await response.text();
+    // El número aparece en el menú como "Remate 249" o en links .ics
+    const numeroMatch = html.match(/Rte_(\d+)_Dia_1\.ics/i)
+      || html.match(/Remate\s+(\d+)/i)
+      || html.match(/inicio\/#(\d+)/i);
 
-    // Extraer número de remate
-    const numeroMatch = html.match(/Remate\s+n?°?\s*(\d+)/i);
-    const numero = numeroMatch ? numeroMatch[1] : null;
+    if (!numeroMatch) throw new Error("No se encontró número de remate");
+    const numero = numeroMatch[1];
 
-    // Limpiar HTML: quitar tags, normalizar espacios y &nbsp;
-    const textoLimpio = html
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/g, " ")
-      .replace(/\u00a0/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+    // 2. Leer los archivos .ics para obtener las fechas (intentar día 1 y día 2)
+    const dias = [];
+    for (let d = 1; d <= 2; d++) {
+      try {
+        const icsUrl = `https://www.lote21.uy/inicio/calendario/Rte_${numero}_Dia_${d}.ics`;
+        const ics = await fetch(icsUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" },
+        }).then(r => r.ok ? r.text() : null);
 
-    // Regex flexible: acepta "MARTES, 9 DE JUNIO - 09:00" y "martes, 21 de mayo - 09:00"
-    const diasMatches = [
-      ...textoLimpio.matchAll(
-        /DIA\s+(\d+)\s*:\s*([\wáéíóúüñÁÉÍÓÚÜÑ]+,\s*\d+\s+(?:DE\s+)?[\wáéíóúüñÁÉÍÓÚÜÑ]+\s*[-–]\s*\d{1,2}:\d{2})/gi
-      ),
-    ];
+        if (!ics) break;
 
-    const dias = diasMatches.map((m) => ({
-      dia: m[1].trim(),
-      descripcion: m[2].trim(),
-    }));
+        // Extraer DTSTART del .ics: formato YYYYMMDDTHHMMSS o YYYYMMDD
+        const dtMatch = ics.match(/DTSTART[^:]*:(\d{4})(\d{2})(\d{2})T?(\d{2})?(\d{2})?/);
+        const summaryMatch = ics.match(/SUMMARY:(.+)/);
 
-    // Fallback: PRÓXIMO REMATE
-    const proximoMatch = textoLimpio.match(
-      /PRÓXIMO REMATE\s+([\wáéíóúüñÁÉÍÓÚÜÑ,\s]+\d+:\d{2})/i
-    );
-    const proximoRemate =
-      proximoMatch
-        ? proximoMatch[1].trim()
-        : dias.length > 0
-        ? dias[0].descripcion
-        : null;
-
-    if (!numero && dias.length === 0 && !proximoRemate) {
-      return res.status(200).json({
-        ok: false,
-        error: "No se encontraron datos del remate",
-        timestamp: new Date().toISOString(),
-      });
+        if (dtMatch) {
+          const anio = dtMatch[1], mes = dtMatch[2], dia = dtMatch[3];
+          const hora = dtMatch[4] ? `${dtMatch[4]}:${dtMatch[5] || "00"}` : null;
+          const MESES_ES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+          const nombreMes = MESES_ES[parseInt(mes) - 1];
+          const DIAS_ES = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+          const fecha = new Date(parseInt(anio), parseInt(mes)-1, parseInt(dia));
+          const nombreDia = DIAS_ES[fecha.getDay()];
+          const descripcion = `${nombreDia} ${parseInt(dia)} de ${nombreMes}${hora ? " - " + hora : ""}`;
+          dias.push({ dia: String(d), descripcion, fecha: `${anio}-${mes}-${dia}` });
+        }
+      } catch { break; }
     }
+
+    if (dias.length === 0) throw new Error("No se pudieron leer los archivos .ics");
+
+    const proximoRemate = dias[0].descripcion;
 
     return res.status(200).json({
       ok: true,
@@ -77,4 +67,4 @@ module.exports = async function handler(req, res) {
       timestamp: new Date().toISOString(),
     });
   }
-};
+}

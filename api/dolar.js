@@ -1,67 +1,75 @@
-// api/dolar.js — API publica del BROU
+// api/dolar.js — scraping 2mas2 + fallback BCU
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
+  res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate");
   if (req.method === "OPTIONS") return res.status(200).end();
 
+  // Fuente 1: 2mas2 scraping del widget BROU
   try {
-    // API publica del BROU - cotizaciones en tiempo real
     const r = await fetch(
-      'https://www.brou.com.uy/o/rest/cotizaciones/hoy',
-      { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
+      'https://2mas2.com.uy/includes-valores/cotizaciones/brou/cotizacion2020-brou.html',
+      {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Referer': 'https://2mas2.com.uy/'
+        }
+      }
     );
     if (r.ok) {
-      const data = await r.json();
-      // Buscar USD en el array de monedas
-      const usd = Array.isArray(data)
-        ? data.find(m => m.codigoISO === 'USD' || m.moneda === 'DOLAR' || (m.nombre && /dolar/i.test(m.nombre)))
-        : null;
-      if (usd) {
+      const html = await r.text();
+      console.log('2mas2 html length:', html.length);
+      console.log('2mas2 preview:', html.slice(0, 500));
+
+      // Buscar patrones numéricos de cotización (ej: 39.15, 41.55)
+      // El widget tiene números entre 35 y 50 para el dólar
+      const matches = html.match(/\d{2}\.\d{2,3}/g) || [];
+      const precios = matches
+        .map(n => parseFloat(n))
+        .filter(n => n >= 35 && n <= 55);
+
+      console.log('Precios encontrados:', precios);
+
+      if (precios.length >= 2) {
+        // Ordenar: el menor es compra, el mayor es venta
+        precios.sort((a, b) => a - b);
         return res.status(200).json({
           ok: true, fuente: 'BROU',
-          compra: String(usd.compra || usd.precioCompra || usd.buy || ''),
-          venta:  String(usd.venta  || usd.precioVenta  || usd.sell || ''),
+          compra: precios[0].toFixed(2),
+          venta:  precios[precios.length - 1].toFixed(2),
           fecha: new Date().toISOString().slice(0,10),
-          timestamp: new Date().toISOString(),
-          raw: usd
+          timestamp: new Date().toISOString()
         });
       }
-      // Si no encontró, devolver raw para ver estructura
-      return res.status(200).json({ ok: false, error: 'USD no encontrado', raw: data });
-    }
-  } catch(e) { console.log('brou/hoy error:', e.message); }
 
-  try {
-    // Alternativa: endpoint de cotizaciones del BROU
-    const r2 = await fetch(
-      'https://www.brou.com.uy/o/rest/cotizaciones/monedas',
-      { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
-    );
-    if (r2.ok) {
-      const data2 = await r2.json();
-      return res.status(200).json({ ok: false, error: 'Ver estructura', raw: data2 });
+      // Debug: devolver el HTML para ver qué tiene
+      return res.status(200).json({
+        ok: false, error: 'Sin precios en 2mas2',
+        html_length: html.length,
+        matches_raw: matches.slice(0, 20),
+        html_sample: html.slice(0, 1000)
+      });
     }
-  } catch(e) { console.log('brou/monedas error:', e.message); }
+  } catch(e) { console.log('2mas2 error:', e.message); }
 
+  // Fuente 2: BCU interbancario como fallback
   try {
-    // Fallback BCU interbancario
-    const fecha = new Date();
-    let fechaStr = '';
-    for (let i = 0; i <= 5; i++) {
+    for (let i = 1; i <= 5; i++) {
       const d = new Date(); d.setDate(d.getDate() - i);
-      fechaStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-      const soap = '<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza"><soapenv:Header/><soapenv:Body><cot:wsbcucotizaciones.Execute><cot:Entrada><cot:Moneda><cot:item>2225</cot:item></cot:Moneda><cot:FechaDesde>' + fechaStr + '</cot:FechaDesde><cot:FechaHasta>' + fechaStr + '</cot:FechaHasta><cot:Grupo>0</cot:Grupo></cot:Entrada></cot:wsbcucotizaciones.Execute></soapenv:Body></soapenv:Envelope>';
-      const r3 = await fetch('https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones', { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8' }, body: soap });
-      const text = await r3.text();
-      const tccM = text.match(/<TCC>([0-9.]+)<\/TCC>/);
-      const tcvM = text.match(/<TCV>([0-9.]+)<\/TCV>/);
-      if (tccM && tcvM) {
+      const fecha = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      const soap = '<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza"><soapenv:Header/><soapenv:Body><cot:wsbcucotizaciones.Execute><cot:Entrada><cot:Moneda><cot:item>2225</cot:item></cot:Moneda><cot:FechaDesde>' + fecha + '</cot:FechaDesde><cot:FechaHasta>' + fecha + '</cot:FechaHasta><cot:Grupo>0</cot:Grupo></cot:Entrada></cot:wsbcucotizaciones.Execute></soapenv:Body></soapenv:Envelope>';
+      const r = await fetch('https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones', {
+        method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8' }, body: soap
+      });
+      const text = await r.text();
+      const tcc = text.match(/<TCC>([0-9.]+)<\/TCC>/);
+      const tcv = text.match(/<TCV>([0-9.]+)<\/TCV>/);
+      if (tcc && tcv && parseFloat(tcc[1]) > 0) {
         return res.status(200).json({
           ok: true, fuente: 'BCU Interbancario',
-          compra: parseFloat(tccM[1]).toFixed(3),
-          venta:  parseFloat(tcvM[1]).toFixed(3),
-          fecha: fechaStr,
-          nota: 'Precio interbancario BCU (referencia)',
+          compra: parseFloat(tcc[1]).toFixed(2),
+          venta:  parseFloat(tcv[1]).toFixed(2),
+          fecha: fecha, nota: 'Referencia BCU',
           timestamp: new Date().toISOString()
         });
       }

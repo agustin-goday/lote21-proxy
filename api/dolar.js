@@ -1,4 +1,4 @@
-// api/dolar.js — BCU SOAP formato correcto
+// api/dolar.js — BCU SOAP sin namespace en elementos internos
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
@@ -6,22 +6,20 @@ export default async function handler(req, res) {
 
   try {
     const hoy = new Date();
-    const dd = String(hoy.getDate()).padStart(2,'0');
-    const mm = String(hoy.getMonth()+1).padStart(2,'0');
-    const yyyy = hoy.getFullYear();
-    // BCU acepta formato YYYY-MM-DD como xsd:date
-    const fecha = yyyy + '-' + mm + '-' + dd;
+    const fecha = hoy.getFullYear() + '-' +
+      String(hoy.getMonth()+1).padStart(2,'0') + '-' +
+      String(hoy.getDate()).padStart(2,'0');
 
-    // Estructura correcta sin wrapper <Entrada>
+    // Sin namespace en elementos internos, Execute con xmlns
     const soapBody = '<?xml version="1.0" encoding="utf-8"?>' +
-      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="http://tempuri.org/">' +
+      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' +
       '<soap:Body>' +
-      '<tns:Execute>' +
-      '<tns:Moneda><tns:item>2225</tns:item></tns:Moneda>' +
-      '<tns:FechaDesde>' + fecha + '</tns:FechaDesde>' +
-      '<tns:FechaHasta>' + fecha + '</tns:FechaHasta>' +
-      '<tns:Grupo>0</tns:Grupo>' +
-      '</tns:Execute>' +
+      '<Execute xmlns="http://tempuri.org/">' +
+      '<Moneda><item>2225</item></Moneda>' +
+      '<FechaDesde>' + fecha + '</FechaDesde>' +
+      '<FechaHasta>' + fecha + '</FechaHasta>' +
+      '<Grupo>0</Grupo>' +
+      '</Execute>' +
       '</soap:Body>' +
       '</soap:Envelope>';
 
@@ -38,7 +36,7 @@ export default async function handler(req, res) {
     );
 
     const text = await r.text();
-    console.log('preview:', text.slice(0, 800));
+    console.log('BCU preview:', text.slice(0, 800));
 
     const compraM = text.match(/<COMPRA>([0-9.,]+)<\/COMPRA>/i);
     const ventaM  = text.match(/<VENTA>([0-9.,]+)<\/VENTA>/i);

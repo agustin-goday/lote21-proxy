@@ -1,79 +1,50 @@
-// api/dolar.js — Dolar billete BROU (compra/venta publico)
+// api/dolar.js — buscar todos los codigos USD disponibles
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
+  res.setHeader("Cache-Control", "no-store");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  function getFecha(daysBack) {
-    const d = new Date();
-    d.setDate(d.getDate() - daysBack);
-    return d.getFullYear() + '-' +
-      String(d.getMonth()+1).padStart(2,'0') + '-' +
-      String(d.getDate()).padStart(2,'0');
-  }
+  // Consultar con Grupo=0 y moneda 0 = todas las monedas
+  // para el 2026-06-01 que sabemos que tiene datos
+  const fecha = '2026-06-01';
+  const soapBody =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza">' +
+    '<soapenv:Header/>' +
+    '<soapenv:Body>' +
+    '<cot:wsbcucotizaciones.Execute>' +
+    '<cot:Entrada>' +
+    '<cot:Moneda><cot:item>0</cot:item></cot:Moneda>' +
+    '<cot:FechaDesde>' + fecha + '</cot:FechaDesde>' +
+    '<cot:FechaHasta>' + fecha + '</cot:FechaHasta>' +
+    '<cot:Grupo>0</cot:Grupo>' +
+    '</cot:Entrada>' +
+    '</cot:wsbcucotizaciones.Execute>' +
+    '</soapenv:Body>' +
+    '</soapenv:Envelope>';
 
-  async function consultarBCU(moneda, fecha) {
-    const soapBody =
-      '<?xml version="1.0" encoding="UTF-8"?>' +
-      '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza">' +
-      '<soapenv:Header/>' +
-      '<soapenv:Body>' +
-      '<cot:wsbcucotizaciones.Execute>' +
-      '<cot:Entrada>' +
-      '<cot:Moneda><cot:item>' + moneda + '</cot:item></cot:Moneda>' +
-      '<cot:FechaDesde>' + fecha + '</cot:FechaDesde>' +
-      '<cot:FechaHasta>' + fecha + '</cot:FechaHasta>' +
-      '<cot:Grupo>0</cot:Grupo>' +
-      '</cot:Entrada>' +
-      '</cot:wsbcucotizaciones.Execute>' +
-      '</soapenv:Body>' +
-      '</soapenv:Envelope>';
-
+  try {
     const r = await fetch(
       'https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones',
       { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8' }, body: soapBody }
     );
-    return r.text();
-  }
+    const text = await r.text();
 
-  try {
-    // Intentar últimos 5 días
-    for (let i = 0; i <= 5; i++) {
-      const fecha = getFecha(i);
+    // Extraer todos los datoscotizaciones.dato que sean USD con TCC != TCV
+    const bloques = text.match(/<datoscotizaciones\.dato[\s\S]*?<\/datoscotizaciones\.dato>/gi) || [];
+    const usd = bloques
+      .filter(b => b.includes('DLS') || b.includes('USD') || b.includes('2225') || b.includes('2222') || b.includes('222'))
+      .map(b => {
+        const moneda = (b.match(/<Moneda>(\d+)<\/Moneda>/) || [])[1];
+        const nombre = (b.match(/<Nombre>([^<]+)<\/Nombre>/) || [])[1];
+        const emisor = (b.match(/<Emisor>([^<]+)<\/Emisor>/) || [])[1];
+        const tcc = (b.match(/<TCC>([^<]+)<\/TCC>/) || [])[1];
+        const tcv = (b.match(/<TCV>([^<]+)<\/TCV>/) || [])[1];
+        return { moneda, nombre, emisor, tcc, tcv };
+      });
 
-      // Moneda 2222 = Dolar USA billete (compra/venta BROU publico)
-      // Moneda 2225 = Dolar interbancario (TCC=TCV, precio referencia)
-      // Probar 2222 primero, fallback a 2225
-      let text = await consultarBCU('2222', fecha);
-      let tccM = text.match(/<TCC>([0-9.]+)<\/TCC>/);
-      let tcvM = text.match(/<TCV>([0-9.]+)<\/TCV>/);
-
-      // Si 2222 no tiene datos, probar 2225
-      if (!tccM || !tcvM) {
-        text = await consultarBCU('2225', fecha);
-        tccM = text.match(/<TCC>([0-9.]+)<\/TCC>/);
-        tcvM = text.match(/<TCV>([0-9.]+)<\/TCV>/);
-      }
-
-      if (tccM && tcvM) {
-        const compra = parseFloat(tccM[1]);
-        const venta  = parseFloat(tcvM[1]);
-
-        // Si compra == venta es interbancario, mostrar igual
-        return res.status(200).json({
-          ok: true,
-          fuente: 'BCU',
-          compra: compra.toFixed(2),
-          venta:  venta.toFixed(2),
-          fecha:  fecha,
-          esInterbancario: compra === venta,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-    return res.status(200).json({ ok: false, error: 'Sin cotización' });
-
+    return res.status(200).json({ total_bloques: bloques.length, usd_encontrados: usd });
   } catch(e) {
-    return res.status(200).json({ ok: false, error: e.message });
+    return res.status(200).json({ error: e.message });
   }
 }

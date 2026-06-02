@@ -1,7 +1,7 @@
-// api/dolar.js — BCU SOAP con búsqueda de último día hábil
+// api/dolar.js — BCU SOAP debug
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
+  res.setHeader("Cache-Control", "no-store");
   if (req.method === "OPTIONS") return res.status(200).end();
 
   function getFecha(daysBack) {
@@ -37,30 +37,35 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Intentar los últimos 5 días hasta encontrar cotización
+    const resultados = [];
     for (let i = 0; i <= 5; i++) {
       const fecha = getFecha(i);
       const text = await consultarBCU(fecha);
-
+      
       const compraM = text.match(/<COMPRA>([0-9.,]+)<\/COMPRA>/i);
       const ventaM  = text.match(/<VENTA>([0-9.,]+)<\/VENTA>/i);
+
+      resultados.push({
+        fecha: fecha,
+        tieneCompra: !!compraM,
+        tieneVenta: !!ventaM,
+        compra: compraM ? compraM[1] : null,
+        venta: ventaM ? ventaM[1] : null,
+        preview: text.slice(200, 600)
+      });
 
       if (compraM && ventaM) {
         return res.status(200).json({
           ok: true,
           fuente: 'BCU',
           compra: compraM[1].replace(',', '.'),
-          venta:  ventaM[1].replace(',', '.'),
+          venta: ventaM[1].replace(',', '.'),
           fecha: fecha,
           timestamp: new Date().toISOString()
         });
       }
-      // Si dice "No existe cotización" sigue al día anterior
-      // Si hay otro error, salir
-      if (!text.includes('No existe cotización')) break;
     }
-
-    return res.status(200).json({ ok: false, error: 'Sin cotización disponible' });
+    return res.status(200).json({ ok: false, debug: resultados });
 
   } catch(e) {
     return res.status(200).json({ ok: false, error: e.message });

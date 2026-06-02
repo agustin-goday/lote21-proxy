@@ -1,6 +1,4 @@
 // api/dolar.js — Cotización dólar interbancario BROU
-// Subir a: lote21-proxy/api/dolar.js en GitHub
-
 module.exports = async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -8,20 +6,29 @@ module.exports = async function handler(req, res) {
 
   if (req.method === "OPTIONS") return res.status(200).end();
 
+  // Fuente: BCU cotizaciones
   try {
-    // Fuente 1: BCU (Banco Central Uruguay) — cotización oficial
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2,'0');
+    const mm = String(today.getMonth()+1).padStart(2,'0');
+    const yyyy = today.getFullYear();
+    const fechaStr = `${yyyy}-${mm}-${dd}`;
+
     const bcuRes = await fetch(
-      "https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/wscotizaciones",
+      `https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/wscotizaciones`,
       {
         method: "POST",
-        headers: { "Content-Type": "text/xml; charset=utf-8", "SOAPAction": "" },
+        headers: {
+          "Content-Type": "text/xml; charset=utf-8",
+          "SOAPAction": '""'
+        },
         body: `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body>
     <Execute xmlns="http://tempuri.org/">
       <Moneda>0</Moneda>
-      <FechaDesde>${new Date().toISOString().slice(0,10)}</FechaDesde>
-      <FechaHasta>${new Date().toISOString().slice(0,10)}</FechaHasta>
+      <FechaDesde>${fechaStr}</FechaDesde>
+      <FechaHasta>${fechaStr}</FechaHasta>
       <Grupo>0</Grupo>
     </Execute>
   </soap:Body>
@@ -31,73 +38,76 @@ module.exports = async function handler(req, res) {
 
     if (bcuRes.ok) {
       const xml = await bcuRes.text();
-      // Buscar dólar interbancario (código 2225 = USD interbancario)
-      const compraMatch = xml.match(/<COMPRA>([0-9.]+)<\/COMPRA>/);
-      const ventaMatch = xml.match(/<VENTA>([0-9.]+)<\/VENTA>/);
-      const fechaMatch = xml.match(/<FECHA>([^<]+)<\/FECHA>/);
-
-      if (compraMatch && ventaMatch) {
-        return res.status(200).json({
-          ok: true,
-          fuente: "BCU",
-          compra: parseFloat(compraMatch[1]).toFixed(2),
-          venta: parseFloat(ventaMatch[1]).toFixed(2),
-          fecha: fechaMatch ? fechaMatch[1] : new Date().toISOString().slice(0,10),
-          timestamp: new Date().toISOString()
-        });
+      // Buscar USD interbancario
+      const bloques = xml.match(/<datoscotizaciones>[\s\S]*?<\/datoscotizaciones>/gi) || [];
+      for (const bloque of bloques) {
+        const moneda = bloque.match(/<MONEDA>([^<]*)<\/MONEDA>/i);
+        const nombre = bloque.match(/<NOMBRE>([^<]*)<\/NOMBRE>/i);
+        // Dólar interbancario tiene código 2225 o nombre "DOLAR INTERBANCARIO"
+        if (nombre && /dolar.*interbancario/i.test(nombre[1])) {
+          const compra = bloque.match(/<COMPRA>([0-9.]+)<\/COMPRA>/i);
+          const venta = bloque.match(/<VENTA>([0-9.]+)<\/VENTA>/i);
+          if (compra && venta) {
+            return res.status(200).json({
+              ok: true,
+              fuente: "BCU",
+              compra: parseFloat(compra[1]).toFixed(2),
+              venta: parseFloat(venta[1]).toFixed(2),
+              fecha: fechaStr,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
+      }
+      // Si no encontró interbancario, tomar el primero que sea USD
+      for (const bloque of bloques) {
+        const nombre = bloque.match(/<NOMBRE>([^<]*)<\/NOMBRE>/i);
+        if (nombre && /dolar/i.test(nombre[1])) {
+          const compra = bloque.match(/<COMPRA>([0-9.]+)<\/COMPRA>/i);
+          const venta = bloque.match(/<VENTA>([0-9.]+)<\/VENTA>/i);
+          if (compra && venta) {
+            return res.status(200).json({
+              ok: true,
+              fuente: "BCU",
+              compra: parseFloat(compra[1]).toFixed(2),
+              venta: parseFloat(venta[1]).toFixed(2),
+              fecha: fechaStr,
+              timestamp: new Date().toISOString()
+            });
+          }
+        }
       }
     }
-  } catch(e) {}
+  } catch(e) {
+    console.log("BCU SOAP error:", e.message);
+  }
 
-  // Fuente 2: 2mas2 scraping como fallback
+  // Fuente 2: scraping 2mas2 (BROU)
   try {
-    const res2 = await fetch(
+    const r = await fetch(
       "https://2mas2.com.uy/includes-valores/cotizaciones/brou/cotizacion2020-brou.html",
-      { headers: { "User-Agent": "Mozilla/5.0" } }
+      { headers: { "User-Agent": "Mozilla/5.0 (compatible; agrodemaria-bot/1.0)" } }
     );
-    const html = await res2.text();
-    
-    // Extraer compra y venta del HTML
-    const compraMatch = html.match(/compra[^0-9]*([0-9]+[.,][0-9]+)/i);
-    const ventaMatch = html.match(/venta[^0-9]*([0-9]+[.,][0-9]+)/i);
-    
-    if (compraMatch && ventaMatch) {
+    const html = await r.text();
+    const compraM = html.match(/compra[^0-9]{0,20}([0-9]{2}[.,][0-9]{2})/i);
+    const ventaM  = html.match(/venta[^0-9]{0,20}([0-9]{2}[.,][0-9]{2})/i);
+    if (compraM && ventaM) {
       return res.status(200).json({
         ok: true,
         fuente: "BROU",
-        compra: compraMatch[1].replace(",", "."),
-        venta: ventaMatch[1].replace(",", "."),
+        compra: compraM[1].replace(",", "."),
+        venta:  ventaM[1].replace(",", "."),
         fecha: new Date().toISOString().slice(0,10),
         timestamp: new Date().toISOString()
       });
     }
-  } catch(e) {}
-
-  // Fuente 3: BCU API REST
-  try {
-    const today = new Date().toISOString().slice(0,10);
-    const bcuApi = await fetch(
-      `https://api.bcuonline.com.uy/cotizaciones/v1?moneda=USD&fecha=${today}`,
-      { headers: { "User-Agent": "Mozilla/5.0" } }
-    );
-    if (bcuApi.ok) {
-      const data = await bcuApi.json();
-      if (data && data.compra) {
-        return res.status(200).json({
-          ok: true,
-          fuente: "BCU",
-          compra: String(data.compra),
-          venta: String(data.venta),
-          fecha: today,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-  } catch(e) {}
+  } catch(e) {
+    console.log("2mas2 error:", e.message);
+  }
 
   return res.status(200).json({
     ok: false,
-    error: "No se pudo obtener cotización",
+    error: "No se pudo obtener cotización del dólar",
     timestamp: new Date().toISOString()
   });
 };

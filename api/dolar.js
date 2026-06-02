@@ -1,4 +1,4 @@
-// api/dolar.js — BCU cotizaciones via SOAP correcto
+// api/dolar.js — BCU SOAP endpoint correcto
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
@@ -9,32 +9,38 @@ export default async function handler(req, res) {
     const dd = String(hoy.getDate()).padStart(2,'0');
     const mm = String(hoy.getMonth()+1).padStart(2,'0');
     const yyyy = hoy.getFullYear();
-    const fecha = dd + '/' + mm + '/' + yyyy;
+    const fecha = yyyy + '-' + mm + '-' + dd;
 
-    // SOAP request al BCU
+    // Endpoint correcto: awsbcucotizaciones (no wscotizaciones)
     const soapBody = `<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
   <soap:Body>
     <Execute xmlns="http://tempuri.org/">
-      <Moneda>2225</Moneda>
-      <FechaDesde>${fecha}</FechaDesde>
-      <FechaHasta>${fecha}</FechaHasta>
-      <Grupo>0</Grupo>
+      <Entrada>
+        <Moneda><item>2225</item></Moneda>
+        <FechaDesde>${fecha}</FechaDesde>
+        <FechaHasta>${fecha}</FechaHasta>
+        <Grupo>0</Grupo>
+      </Entrada>
     </Execute>
   </soap:Body>
 </soap:Envelope>`;
 
-    const r = await fetch('https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/wscotizaciones', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/xml; charset=utf-8',
-        'SOAPAction': '"http://tempuri.org/Execute"'
-      },
-      body: soapBody
-    });
+    const r = await fetch(
+      'https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/xml; charset=utf-8',
+          'SOAPAction': '"http://tempuri.org/Execute"'
+        },
+        body: soapBody
+      }
+    );
 
     const text = await r.text();
-    console.log('BCU SOAP status:', r.status, 'len:', text.length);
+    console.log('BCU status:', r.status, 'len:', text.length);
+    console.log('BCU preview:', text.slice(0, 500));
 
     const compraM = text.match(/<COMPRA>([0-9.,]+)<\/COMPRA>/i);
     const ventaM  = text.match(/<VENTA>([0-9.,]+)<\/VENTA>/i);
@@ -50,11 +56,12 @@ export default async function handler(req, res) {
       });
     }
 
-    console.log('BCU preview:', text.slice(0, 400));
+    // Si no encontro valores devolver preview para debug
     return res.status(200).json({
       ok: false,
-      error: 'Sin valores en BCU SOAP',
-      preview: text.slice(0, 400)
+      error: 'Sin valores',
+      status: r.status,
+      preview: text.slice(0, 600)
     });
 
   } catch(e) {

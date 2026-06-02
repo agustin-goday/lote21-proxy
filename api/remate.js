@@ -11,64 +11,69 @@ export default async function handler(req, res) {
     }).then(r => r.text());
 
     // Número de remate
-    const numeroMatch = html.match(/Remate\s+(\d+)/i)
-      || html.match(/Rte_(\d+)/i);
+    const numeroMatch = html.match(/Remate\s+(\d+)/i) || html.match(/Rte_(\d+)/i);
     if (!numeroMatch) throw new Error("No se encontró número de remate");
     const numero = numeroMatch[1];
 
-    // Estructura real del HTML de lote21:
-    // <span class="color-DBBA34...">DIA 1: </span>
-    // <span class="color-FFFFFF...">martes, 9 de junio – 09:00</span>
-    // El guión puede ser – (largo) o - (corto)
-    // Estrategia: buscar spans blancos (color-FFFFFF) que contengan fechas
-    // justo después de spans dorados (color-DBBA34) que dicen "DIA N:"
-
     const dias = [];
 
-    // Patrón: DIA N: seguido (en el mismo o siguiente span) por la fecha
-    // El texto limpio tiene: "DIA 1: martes, 9 de junio – 09:00"
-    const textoLimpio = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    // Estrategia: buscar cada span con "DIA N:" y tomar el span inmediatamente siguiente
+    // Estructura: <span>DIA 1: </span><span>martes, 9 de junio – 09:00</span>
+    
+    // Buscar bloques "DIA N:" + contenido del span siguiente
+    const reDiaSpan = /DIA\s+(\d+)\s*:\s*<\/span>\s*<span[^>]*>([^<]+)/gi;
+    const spanMatches = [...html.matchAll(reDiaSpan)];
 
-    // Buscar "DIA 1:" y "DIA 2:" y capturar lo que sigue
-    const reDia = /DIA\s+(\d+)\s*:\s*((?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[^<\n]{3,50})/gi;
-    const matches = [...textoLimpio.matchAll(reDia)];
-
-    if (matches.length > 0) {
-      matches.forEach(m => {
-        const desc = m[2].trim()
-          .replace(/\s*[–-]\s*/g, ' - ')  // normalizar guión largo a corto
+    if (spanMatches.length > 0) {
+      spanMatches.forEach(m => {
+        // Decodificar entidades HTML simples
+        const desc = m[2]
+          .replace(/&#233;/g, 'é').replace(/&#201;/g, 'É')
+          .replace(/&#237;/g, 'í').replace(/&#243;/g, 'ó')
+          .replace(/&#225;/g, 'á').replace(/&#250;/g, 'ú')
+          .replace(/&eacute;/g, 'é').replace(/&iacute;/g, 'í')
+          .replace(/&oacute;/g, 'ó').replace(/&aacute;/g, 'á')
+          .replace(/[–—]/g, '-')  // normalizar guión largo
           .replace(/\s+/g, ' ')
           .trim();
-        // Capitalizar primera letra
-        dias.push({
-          dia: m[1],
-          descripcion: desc.charAt(0).toUpperCase() + desc.slice(1)
-        });
-      });
-    } else {
-      // Fallback: buscar spans con color-FFFFFF que tengan días de semana
-      const spanRe = /color-FFFFFF[^>]*>([^<]*(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[^<]*)</gi;
-      const spanMatches = [...html.matchAll(spanRe)];
-      spanMatches.slice(0, 2).forEach((m, i) => {
-        const desc = m[1].trim()
-          .replace(/\s*[–-]\s*/g, ' - ')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (desc.length > 5) {
+        if (desc.length > 4) {
           dias.push({
-            dia: String(i + 1),
+            dia: m[1],
             descripcion: desc.charAt(0).toUpperCase() + desc.slice(1)
           });
         }
       });
     }
 
+    // Fallback: texto limpio con límite estricto por día
+    if (dias.length === 0) {
+      const textoLimpio = html.replace(/<[^>]+>/g, '\n').replace(/[ \t]+/g, ' ');
+      // Buscar líneas que empiecen con "DIA N:" 
+      const lineas = textoLimpio.split('\n').map(l => l.trim()).filter(Boolean);
+      for (let i = 0; i < lineas.length; i++) {
+        const diaMatch = lineas[i].match(/^DIA\s+(\d+)\s*:\s*(.+)?$/i);
+        if (diaMatch) {
+          let desc = diaMatch[2] || '';
+          // Si la descripción está en la línea siguiente
+          if (!desc && lineas[i+1] && !/^DIA\s+\d/i.test(lineas[i+1])) {
+            desc = lineas[i+1];
+          }
+          desc = desc
+            .replace(/&#233;/g, 'é').replace(/&#237;/g, 'í')
+            .replace(/&#243;/g, 'ó').replace(/&#225;/g, 'á')
+            .replace(/[–—]/g, '-')
+            .replace(/\s+/g, ' ').trim();
+          if (desc.length > 4) {
+            dias.push({ dia: diaMatch[1], descripcion: desc.charAt(0).toUpperCase() + desc.slice(1) });
+          }
+        }
+      }
+    }
+
     if (dias.length === 0) throw new Error("No se encontraron días");
 
     return res.status(200).json({
-      ok: true,
-      numero,
-      dias,
+      ok: true, numero, dias,
       proximoRemate: dias[0].descripcion,
       timestamp: new Date().toISOString()
     });

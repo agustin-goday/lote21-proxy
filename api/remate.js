@@ -1,4 +1,4 @@
-// api/remate.js — Próximo remate Lote21 scrapeando HTML directamente
+// api/remate.js — Próximo remate Lote21
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -10,55 +10,57 @@ export default async function handler(req, res) {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", "Accept": "text/html" }
     }).then(r => r.text());
 
-    // Extraer número de remate
+    // Número de remate
     const numeroMatch = html.match(/Remate\s+(\d+)/i)
-      || html.match(/Rte_(\d+)/i)
-      || html.match(/remate[_\s]+(\d+)/i);
+      || html.match(/Rte_(\d+)/i);
     if (!numeroMatch) throw new Error("No se encontró número de remate");
     const numero = numeroMatch[1];
 
-    // Extraer días — Lote21 los muestra como:
-    // "DIA 1: MARTES, 9 DE JUNIO - 09:00" y "DIA 2: MIÉRCOLES, 10 DE JUNIO - 09:00"
-    const diasRaw = [...html.matchAll(/DIA\s+(\d+)\s*:\s*([^<"'\n]{5,60}?)(?:\s*[-–]\s*(\d{2}:\d{2}))?(?=[<"'\s]|$)/gi)];
+    // Estructura real del HTML de lote21:
+    // <span class="color-DBBA34...">DIA 1: </span>
+    // <span class="color-FFFFFF...">martes, 9 de junio – 09:00</span>
+    // El guión puede ser – (largo) o - (corto)
+    // Estrategia: buscar spans blancos (color-FFFFFF) que contengan fechas
+    // justo después de spans dorados (color-DBBA34) que dicen "DIA N:"
 
-    const MESES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
-    const DIAS_ES = ["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+    const dias = [];
 
-    function formatDesc(raw) {
-      // "MARTES, 9 DE JUNIO - 09:00" → "martes 9 de junio - 09:00"
-      if (!raw) return '';
-      return raw.trim()
-        .replace(/,\s*/g, ' ')
-        .replace(/\s+DE\s+/gi, ' de ')
-        .replace(/\b([A-ZÁÉÍÓÚÜ]+)\b/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-        .replace(/\s+/g, ' ')
-        .trim();
-    }
+    // Patrón: DIA N: seguido (en el mismo o siguiente span) por la fecha
+    // El texto limpio tiene: "DIA 1: martes, 9 de junio – 09:00"
+    const textoLimpio = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
 
-    let dias = [];
+    // Buscar "DIA 1:" y "DIA 2:" y capturar lo que sigue
+    const reDia = /DIA\s+(\d+)\s*:\s*((?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[^<\n]{3,50})/gi;
+    const matches = [...textoLimpio.matchAll(reDia)];
 
-    if (diasRaw.length > 0) {
-      // Encontró el patrón "DIA 1: ..."
-      dias = diasRaw.map(m => ({
-        dia: m[1],
-        descripcion: formatDesc(m[2] + (m[3] ? ' - ' + m[3] : ''))
-      }));
+    if (matches.length > 0) {
+      matches.forEach(m => {
+        const desc = m[2].trim()
+          .replace(/\s*[–-]\s*/g, ' - ')  // normalizar guión largo a corto
+          .replace(/\s+/g, ' ')
+          .trim();
+        // Capitalizar primera letra
+        dias.push({
+          dia: m[1],
+          descripcion: desc.charAt(0).toUpperCase() + desc.slice(1)
+        });
+      });
     } else {
-      // Fallback: buscar fechas con patrón DIAX, MES en el HTML limpio
-      const textoLimpio = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-      
-      // Buscar "MARTES, 9 DE JUNIO - 09:00" o "MARTES, 9 DE JUNIO"
-      const meses = MESES.join('|');
-      const re = new RegExp(
-        '(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[,\\s]+(\\d{1,2})\\s+de\\s+(' + meses + ')(?:\\s*[-–]\\s*(\\d{2}:\\d{2}))?',
-        'gi'
-      );
-      const fechas = [...textoLimpio.matchAll(re)];
-      const unicas = [...new Set(fechas.map(m => m[0].trim()))];
-      dias = unicas.slice(0, 2).map((f, i) => ({
-        dia: String(i + 1),
-        descripcion: f.charAt(0).toUpperCase() + f.slice(1).toLowerCase()
-      }));
+      // Fallback: buscar spans con color-FFFFFF que tengan días de semana
+      const spanRe = /color-FFFFFF[^>]*>([^<]*(?:lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo)[^<]*)</gi;
+      const spanMatches = [...html.matchAll(spanRe)];
+      spanMatches.slice(0, 2).forEach((m, i) => {
+        const desc = m[1].trim()
+          .replace(/\s*[–-]\s*/g, ' - ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (desc.length > 5) {
+          dias.push({
+            dia: String(i + 1),
+            descripcion: desc.charAt(0).toUpperCase() + desc.slice(1)
+          });
+        }
+      });
     }
 
     if (dias.length === 0) throw new Error("No se encontraron días");

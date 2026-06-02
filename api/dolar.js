@@ -1,50 +1,72 @@
-// api/dolar.js — buscar todos los codigos USD disponibles
+// api/dolar.js — API publica del BROU
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  // Consultar con Grupo=0 y moneda 0 = todas las monedas
-  // para el 2026-06-01 que sabemos que tiene datos
-  const fecha = '2026-06-01';
-  const soapBody =
-    '<?xml version="1.0" encoding="UTF-8"?>' +
-    '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza">' +
-    '<soapenv:Header/>' +
-    '<soapenv:Body>' +
-    '<cot:wsbcucotizaciones.Execute>' +
-    '<cot:Entrada>' +
-    '<cot:Moneda><cot:item>0</cot:item></cot:Moneda>' +
-    '<cot:FechaDesde>' + fecha + '</cot:FechaDesde>' +
-    '<cot:FechaHasta>' + fecha + '</cot:FechaHasta>' +
-    '<cot:Grupo>0</cot:Grupo>' +
-    '</cot:Entrada>' +
-    '</cot:wsbcucotizaciones.Execute>' +
-    '</soapenv:Body>' +
-    '</soapenv:Envelope>';
+  try {
+    // API publica del BROU - cotizaciones en tiempo real
+    const r = await fetch(
+      'https://www.brou.com.uy/o/rest/cotizaciones/hoy',
+      { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
+    );
+    if (r.ok) {
+      const data = await r.json();
+      // Buscar USD en el array de monedas
+      const usd = Array.isArray(data)
+        ? data.find(m => m.codigoISO === 'USD' || m.moneda === 'DOLAR' || (m.nombre && /dolar/i.test(m.nombre)))
+        : null;
+      if (usd) {
+        return res.status(200).json({
+          ok: true, fuente: 'BROU',
+          compra: String(usd.compra || usd.precioCompra || usd.buy || ''),
+          venta:  String(usd.venta  || usd.precioVenta  || usd.sell || ''),
+          fecha: new Date().toISOString().slice(0,10),
+          timestamp: new Date().toISOString(),
+          raw: usd
+        });
+      }
+      // Si no encontró, devolver raw para ver estructura
+      return res.status(200).json({ ok: false, error: 'USD no encontrado', raw: data });
+    }
+  } catch(e) { console.log('brou/hoy error:', e.message); }
 
   try {
-    const r = await fetch(
-      'https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones',
-      { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8' }, body: soapBody }
+    // Alternativa: endpoint de cotizaciones del BROU
+    const r2 = await fetch(
+      'https://www.brou.com.uy/o/rest/cotizaciones/monedas',
+      { headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0' } }
     );
-    const text = await r.text();
+    if (r2.ok) {
+      const data2 = await r2.json();
+      return res.status(200).json({ ok: false, error: 'Ver estructura', raw: data2 });
+    }
+  } catch(e) { console.log('brou/monedas error:', e.message); }
 
-    // Extraer todos los datoscotizaciones.dato que sean USD con TCC != TCV
-    const bloques = text.match(/<datoscotizaciones\.dato[\s\S]*?<\/datoscotizaciones\.dato>/gi) || [];
-    const usd = bloques
-      .filter(b => b.includes('DLS') || b.includes('USD') || b.includes('2225') || b.includes('2222') || b.includes('222'))
-      .map(b => {
-        const moneda = (b.match(/<Moneda>(\d+)<\/Moneda>/) || [])[1];
-        const nombre = (b.match(/<Nombre>([^<]+)<\/Nombre>/) || [])[1];
-        const emisor = (b.match(/<Emisor>([^<]+)<\/Emisor>/) || [])[1];
-        const tcc = (b.match(/<TCC>([^<]+)<\/TCC>/) || [])[1];
-        const tcv = (b.match(/<TCV>([^<]+)<\/TCV>/) || [])[1];
-        return { moneda, nombre, emisor, tcc, tcv };
-      });
+  try {
+    // Fallback BCU interbancario
+    const fecha = new Date();
+    let fechaStr = '';
+    for (let i = 0; i <= 5; i++) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      fechaStr = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+      const soap = '<?xml version="1.0" encoding="UTF-8"?><soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza"><soapenv:Header/><soapenv:Body><cot:wsbcucotizaciones.Execute><cot:Entrada><cot:Moneda><cot:item>2225</cot:item></cot:Moneda><cot:FechaDesde>' + fechaStr + '</cot:FechaDesde><cot:FechaHasta>' + fechaStr + '</cot:FechaHasta><cot:Grupo>0</cot:Grupo></cot:Entrada></cot:wsbcucotizaciones.Execute></soapenv:Body></soapenv:Envelope>';
+      const r3 = await fetch('https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones', { method: 'POST', headers: { 'Content-Type': 'text/xml; charset=utf-8' }, body: soap });
+      const text = await r3.text();
+      const tccM = text.match(/<TCC>([0-9.]+)<\/TCC>/);
+      const tcvM = text.match(/<TCV>([0-9.]+)<\/TCV>/);
+      if (tccM && tcvM) {
+        return res.status(200).json({
+          ok: true, fuente: 'BCU Interbancario',
+          compra: parseFloat(tccM[1]).toFixed(3),
+          venta:  parseFloat(tcvM[1]).toFixed(3),
+          fecha: fechaStr,
+          nota: 'Precio interbancario BCU (referencia)',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+  } catch(e) {}
 
-    return res.status(200).json({ total_bloques: bloques.length, usd_encontrados: usd });
-  } catch(e) {
-    return res.status(200).json({ error: e.message });
-  }
+  return res.status(200).json({ ok: false, error: 'Sin cotización disponible' });
 }

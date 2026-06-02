@@ -1,4 +1,4 @@
-// api/dolar.js — BCU SOAP sin namespace en elementos internos
+// api/dolar.js — BCU SOAP formato exacto documentado
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
@@ -10,27 +10,30 @@ export default async function handler(req, res) {
       String(hoy.getMonth()+1).padStart(2,'0') + '-' +
       String(hoy.getDate()).padStart(2,'0');
 
-    // Sin namespace en elementos internos, Execute con xmlns
-    const soapBody = '<?xml version="1.0" encoding="utf-8"?>' +
-      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">' +
-      '<soap:Body>' +
-      '<Execute xmlns="http://tempuri.org/">' +
-      '<Moneda><item>2225</item></Moneda>' +
-      '<FechaDesde>' + fecha + '</FechaDesde>' +
-      '<FechaHasta>' + fecha + '</FechaHasta>' +
-      '<Grupo>0</Grupo>' +
-      '</Execute>' +
-      '</soap:Body>' +
-      '</soap:Envelope>';
+    // Formato exacto según documentación oficial
+    const soapBody =
+      '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:cot="Cotiza">' +
+      '<soapenv:Header/>' +
+      '<soapenv:Body>' +
+      '<cot:wsbcucotizaciones.Execute>' +
+      '<cot:Entrada>' +
+      '<cot:Moneda>' +
+      '<cot:item>2225</cot:item>' +
+      '</cot:Moneda>' +
+      '<cot:FechaDesde>' + fecha + '</cot:FechaDesde>' +
+      '<cot:FechaHasta>' + fecha + '</cot:FechaHasta>' +
+      '<cot:Grupo>0</cot:Grupo>' +
+      '</cot:Entrada>' +
+      '</cot:wsbcucotizaciones.Execute>' +
+      '</soapenv:Body>' +
+      '</soapenv:Envelope>';
 
     const r = await fetch(
       'https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones',
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'text/xml; charset=utf-8',
-          'SOAPAction': '"http://tempuri.org/Execute"'
-        },
+        headers: { 'Content-Type': 'text/xml; charset=utf-8' },
         body: soapBody
       }
     );

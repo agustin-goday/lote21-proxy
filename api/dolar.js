@@ -1,4 +1,4 @@
-// api/dolar.js — BCU SOAP endpoint correcto
+// api/dolar.js — BCU SOAP formato correcto
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate");
@@ -9,22 +9,21 @@ export default async function handler(req, res) {
     const dd = String(hoy.getDate()).padStart(2,'0');
     const mm = String(hoy.getMonth()+1).padStart(2,'0');
     const yyyy = hoy.getFullYear();
+    // BCU acepta formato YYYY-MM-DD como xsd:date
     const fecha = yyyy + '-' + mm + '-' + dd;
 
-    // Endpoint correcto: awsbcucotizaciones (no wscotizaciones)
-    const soapBody = `<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
-  <soap:Body>
-    <Execute xmlns="http://tempuri.org/">
-      <Entrada>
-        <Moneda><item>2225</item></Moneda>
-        <FechaDesde>${fecha}</FechaDesde>
-        <FechaHasta>${fecha}</FechaHasta>
-        <Grupo>0</Grupo>
-      </Entrada>
-    </Execute>
-  </soap:Body>
-</soap:Envelope>`;
+    // Estructura correcta sin wrapper <Entrada>
+    const soapBody = '<?xml version="1.0" encoding="utf-8"?>' +
+      '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:tns="http://tempuri.org/">' +
+      '<soap:Body>' +
+      '<tns:Execute>' +
+      '<tns:Moneda><tns:item>2225</tns:item></tns:Moneda>' +
+      '<tns:FechaDesde>' + fecha + '</tns:FechaDesde>' +
+      '<tns:FechaHasta>' + fecha + '</tns:FechaHasta>' +
+      '<tns:Grupo>0</tns:Grupo>' +
+      '</tns:Execute>' +
+      '</soap:Body>' +
+      '</soap:Envelope>';
 
     const r = await fetch(
       'https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones',
@@ -39,8 +38,7 @@ export default async function handler(req, res) {
     );
 
     const text = await r.text();
-    console.log('BCU status:', r.status, 'len:', text.length);
-    console.log('BCU preview:', text.slice(0, 500));
+    console.log('preview:', text.slice(0, 800));
 
     const compraM = text.match(/<COMPRA>([0-9.,]+)<\/COMPRA>/i);
     const ventaM  = text.match(/<VENTA>([0-9.,]+)<\/VENTA>/i);
@@ -56,12 +54,10 @@ export default async function handler(req, res) {
       });
     }
 
-    // Si no encontro valores devolver preview para debug
     return res.status(200).json({
       ok: false,
       error: 'Sin valores',
-      status: r.status,
-      preview: text.slice(0, 600)
+      preview: text.slice(0, 800)
     });
 
   } catch(e) {

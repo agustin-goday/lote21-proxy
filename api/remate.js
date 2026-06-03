@@ -1,4 +1,4 @@
-// api/remate.js — Próximo remate + próximos del calendario Lote21
+// api/remate.js — Próximo remate + próximos del calendario via panel.lote21.uy
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
@@ -10,7 +10,7 @@ export default async function handler(req, res) {
       headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", "Accept": "text/html" }
     }).then(r => r.text());
 
-    // ── Número de remate ──
+    // ── Número de remate actual ──
     const numeroMatch = html.match(/Remate\s+(\d+)/i) || html.match(/Rte_(\d+)/i);
     if (!numeroMatch) throw new Error("No se encontró número de remate");
     const numero = numeroMatch[1];
@@ -28,16 +28,12 @@ export default async function handler(req, res) {
           .replace(/&#250;/g, 'ú').replace(/&eacute;/g, 'é')
           .replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
         if (desc.length > 4) {
-          dias.push({
-            dia: m[1],
-            descripcion: desc.charAt(0).toUpperCase() + desc.slice(1)
-          });
+          dias.push({ dia: m[1], descripcion: desc.charAt(0).toUpperCase() + desc.slice(1) });
         }
       });
     }
 
     if (dias.length === 0) {
-      // Fallback texto limpio
       const textoLimpio = html.replace(/<[^>]+>/g, '\n').replace(/[ \t]+/g, ' ');
       const lineas = textoLimpio.split('\n').map(l => l.trim()).filter(Boolean);
       for (let i = 0; i < lineas.length; i++) {
@@ -52,61 +48,57 @@ export default async function handler(req, res) {
 
     if (dias.length === 0) throw new Error("No se encontraron días");
 
-    // ── Próximos remates del calendario ──
-    const proximos = [];
-    const mesesNombres = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
-    const diasSemana = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
-    const anio = new Date().getFullYear();
+    // ── Próximos remates desde panel.lote21.uy ──
+    let proximos = [];
+    try {
+      const rematesData = await fetch("https://panel.lote21.uy/json/remates_get.asp", {
+        headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", "Accept": "application/json" }
+      }).then(r => r.json());
 
-    // Extraer bloques por mes del calendario
-    const calRe = /<h3>([A-Za-záéíóúüñ]+)<\/h3>([\s\S]*?)(?=<h3>|<div class="fecha-proximo|$)/gi;
-    const calBlocks = [...html.matchAll(calRe)];
+      const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+      const DIAS_S = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+      const hoy = new Date();
 
-    calBlocks.forEach(block => {
-      const mesNombre = block[1].toLowerCase();
-      const mesIdx = mesesNombres.indexOf(mesNombre);
-      if (mesIdx < 0) return;
+      // Filtrar: solo portada=1, fecha futura, excluir el actual
+      const futuros = rematesData
+        .filter(r => String(r.portada) === "1" && String(r.numero) !== numero)
+        .map(r => {
+          // Parsear fecha1
+          const f = r.fecha1 ? String(r.fecha1).trim() : '';
+          let fecha = null;
+          const mISO = f.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+          const mDMY = f.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+          if (mISO) fecha = new Date(+mISO[1], +mISO[2]-1, +mISO[3]);
+          else if (mDMY) fecha = new Date(+mDMY[3], +mDMY[2]-1, +mDMY[1]);
+          return { ...r, fechaObj: fecha };
+        })
+        .filter(r => r.fechaObj && r.fechaObj > hoy)
+        .sort((a, b) => a.fechaObj - b.fechaObj)
+        .slice(0, 3);
 
-      // Buscar highlights con tooltip-calendar
-      const highlightRe = /<span>(\d+)<\/span>[\s\S]*?tooltip-calendar"[^>]*title="([^"]*)"[\s\S]*?href="([^"]*)"/gi;
-      const highlights = [...block[2].matchAll(highlightRe)];
-
-      highlights.forEach(h => {
-        const dia = parseInt(h[1]);
-        const titulo = h[2].trim();
-        const href = h[3];
-        const numMatch = href.match(/r=(\d+)/);
-        if (!numMatch) return;
-        const numR = numMatch[1];
-
-        const fecha = new Date(anio, mesIdx, dia);
-        const diaSem = diasSemana[fecha.getDay()];
-        const descripcion = diaSem.charAt(0).toUpperCase() + diaSem.slice(1) + ' ' + dia + ' de ' + mesNombre.charAt(0).toUpperCase() + mesNombre.slice(1);
-
-        proximos.push({
-          numero: numR,
-          titulo,
-          fecha: `${anio}-${String(mesIdx+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`,
-          descripcion
-        });
+      proximos = futuros.map(r => {
+        const f = r.fechaObj;
+        const diaSem = DIAS_S[f.getDay()];
+        const descripcion = diaSem.charAt(0).toUpperCase() + diaSem.slice(1)
+          + ' ' + f.getDate() + ' de ' + MESES[f.getMonth()];
+        return {
+          numero: String(r.numero),
+          descripcion,
+          nombre: r.nombre || '',
+          lugar: r.descripcion || '',
+          fecha: r.fecha1
+        };
       });
-    });
-
-    // Ordenar, deduplicar, excluir el actual
-    proximos.sort((a,b) => a.fecha.localeCompare(b.fecha));
-    const vistos = new Set([numero]);
-    const proximosUnicos = proximos.filter(r => {
-      if (vistos.has(r.numero)) return false;
-      vistos.add(r.numero);
-      return true;
-    }).slice(0, 5);
+    } catch(e) {
+      console.log("Error proximos:", e.message);
+    }
 
     return res.status(200).json({
       ok: true,
       numero,
       dias,
       proximoRemate: dias[0].descripcion,
-      proximos: proximosUnicos,  // ← nuevos: próximos del calendario
+      proximos,
       timestamp: new Date().toISOString()
     });
 

@@ -4,60 +4,69 @@ export default async function handler(req, res) {
   res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=300");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  function parseVal(str) {
-    if (!str) return null;
-    const m = String(str).replace(/\s/g, '').match(/(\d{1,3}[.,]\d{2,5})/);
-    if (!m) return null;
-    return parseFloat(m[1].replace(',', '.'));
+  function fmt2(val) {
+    if (!val && val !== 0) return null;
+    const n = typeof val === 'string' ? parseFloat(val.replace(',', '.')) : val;
+    if (isNaN(n)) return null;
+    return n.toFixed(2);
   }
 
-  function fmt(n) {
-    if (!n) return null;
-    return n.toFixed(4).replace(/\.?0+$/, '') || n.toFixed(2);
+  function extractVal(str) {
+    if (!str) return null;
+    const clean = str.replace(/\s/g, '').replace(',', '.');
+    const m = clean.match(/(\d{1,4}\.\d{2,6})/);
+    return m ? parseFloat(m[1]) : null;
   }
 
   try {
-    // ── BROU cotizaciones ──
-    const brouUrl = "https://www.brou.com.uy/c/portal/render_portlet?p_l_id=20593&p_p_id=cotizacionfull_WAR_broutmfportlet_INSTANCE_otHfewh1klyS&p_p_lifecycle=0&p_p_state=normal&p_p_mode=view&p_p_col_id=column-1&p_p_col_pos=0&p_p_col_count=1";
-
-    const brouHtml = await fetch(brouUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+    // ── BROU — página principal de cotizaciones ──
+    const brouHtml = await fetch("https://www.brou.com.uy/web/guest/cotizaciones", {
+      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0", "Accept": "text/html" }
     }).then(r => r.text());
 
-    // Extraer filas de la tabla de cotizaciones
-    // Formato: MONEDA ... compra ... venta
+    // Buscar filas de la tabla con las monedas
+    // Formato típico: <td>Dólar EE.UU.</td><td>39,05</td><td>41,45</td>
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-    const tdRe = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-    const rows = [...brouHtml.matchAll(rowRe)];
+    const tdRe = /<td[^>]*>([^<]*)<\/td>/gi;
 
-    const cotizaciones = {};
-    const MONEDAS = {
-      'dólar': 'usd', 'dolar': 'usd',
-      'euro': 'eur',
-      'peso argentino': 'ars', 'argentino': 'ars',
-      'real': 'brl', 'real brasileño': 'brl',
+    const BUSCAR = {
+      usd: ['dólar', 'dolar', 'ee.uu', 'eeuu', 'estados unidos'],
+      eur: ['euro'],
+      ars: ['argentino', 'argentina'],
+      brl: ['real', 'brasil', 'brasileño'],
     };
 
-    rows.forEach(row => {
-      const tds = [...row[1].matchAll(tdRe)].map(td =>
-        td[1].replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
-      );
-      if (tds.length < 3) return;
-      const monedaRaw = tds[0].toLowerCase();
-      const key = Object.entries(MONEDAS).find(([k]) => monedaRaw.includes(k))?.[1];
-      if (!key) return;
-      const compra = parseVal(tds[1]);
-      const venta = parseVal(tds[2]);
-      if (compra && venta) cotizaciones[key] = { compra: fmt(compra), venta: fmt(venta) };
-    });
+    const cotizaciones = { usd: null, eur: null, ars: null, brl: null };
 
-    // Fallback regex directo para USD si no encontró por tabla
+    for (const rowMatch of brouHtml.matchAll(rowRe)) {
+      const cells = [...rowMatch[1].matchAll(tdRe)].map(td =>
+        td[1].replace(/&nbsp;/g, ' ').replace(/&#\d+;/g, '').trim().toLowerCase()
+      );
+      if (cells.length < 3) continue;
+      const moneda = cells[0];
+      for (const [key, terms] of Object.entries(BUSCAR)) {
+        if (cotizaciones[key]) continue;
+        if (terms.some(t => moneda.includes(t))) {
+          const compra = extractVal(cells[1]);
+          const venta = extractVal(cells[2]);
+          if (compra && venta) {
+            cotizaciones[key] = { compra: fmt2(compra), venta: fmt2(venta) };
+          }
+        }
+      }
+    }
+
+    // Fallback para USD si la tabla no lo dio: usar el portlet original
     if (!cotizaciones.usd) {
-      const usdM = brouHtml.match(/(\d{2},\d{4,5})/g);
-      if (usdM && usdM.length >= 2) {
+      const portletUrl = "https://www.brou.com.uy/c/portal/render_portlet?p_l_id=20593&p_p_id=cotizacionfull_WAR_broutmfportlet_INSTANCE_otHfewh1klyS&p_p_lifecycle=0&p_p_state=normal&p_p_mode=view&p_p_col_id=column-1&p_p_col_pos=0&p_p_col_count=1";
+      const portletHtml = await fetch(portletUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+      }).then(r => r.text());
+      const nums = portletHtml.match(/\d{2},\d{4,5}/g);
+      if (nums && nums.length >= 2) {
         cotizaciones.usd = {
-          compra: usdM[0].replace(',', '.'),
-          venta: usdM[1].replace(',', '.')
+          compra: fmt2(nums[0].replace(',', '.')),
+          venta: fmt2(nums[1].replace(',', '.'))
         };
       }
     }
@@ -69,8 +78,9 @@ export default async function handler(req, res) {
         headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
       }).then(r => r.text());
 
-      const uiM = bcuHtml.match(/UI[^<]*?(\d+[.,]\d{4})/i);
-      const urM = bcuHtml.match(/UR[^<]*?(\d+[.,]\d{2,4})/i);
+      // Buscar UI y UR en la página
+      const uiM = bcuHtml.match(/Unidad Indexada[\s\S]{0,200}?(\d+[.,]\d{4})/i);
+      const urM = bcuHtml.match(/Unidad Reajustable[\s\S]{0,200}?(\d+[.,]\d{2,4})/i);
       if (uiM) ui = parseFloat(uiM[1].replace(',', '.')).toFixed(4);
       if (urM) ur = parseFloat(urM[1].replace(',', '.')).toFixed(2);
     } catch(_) {}
@@ -84,12 +94,7 @@ export default async function handler(req, res) {
       fecha,
       compra: usd.compra || null,
       venta: usd.venta || null,
-      cotizaciones: {
-        usd: usd,
-        eur: cotizaciones.eur || null,
-        ars: cotizaciones.ars || null,
-        brl: cotizaciones.brl || null,
-      },
+      cotizaciones,
       ui,
       ur,
       timestamp: new Date().toISOString()

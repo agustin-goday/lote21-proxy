@@ -16,8 +16,8 @@ export default async function handler(req, res) {
 
   // El ID interno de Plaza Rural es el mismo número público del remate
   // (confirmado desde el HTML de portada: href="/remates/324" para el remate 324)
-  const idInterno = parseInt(remate);
-
+const idInterno = parseInt(remate) - 248;
+  
   const CATEGORIAS = [
     { id: 15, nombre: "Terneros" },
     { id: 3,  nombre: "Terneras" },

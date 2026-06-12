@@ -1,7 +1,7 @@
 // api/lotes-plaza-rural.js
-// Devuelve los lotes de Aramburu (escritorio_id=7) para un remate de Plaza Rural dado
-// FIX: El ID interno ya no se calcula con fórmula fija (remate - 248).
-//      Ahora se descubre dinámicamente consultando la página del remate en Plaza Rural.
+// Devuelve los lotes de Aramburu (escritorio_id=7) para un remate de Plaza Rural.
+// FIX: El ID interno de Plaza Rural ES el mismo número público del remate.
+//      La fórmula anterior (remate - 248) era incorrecta.
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -14,7 +14,10 @@ export default async function handler(req, res) {
   const ESCRITORIO_ID = 7; // Aramburu
   const TOKEN = "dxAkpnxQnWSIWopkJYMpHAiHkT58qV1uxQYFy9RV";
 
-  // Categorías de Plaza Rural con sus IDs
+  // El ID interno de Plaza Rural es el mismo número público del remate
+  // (confirmado desde el HTML de portada: href="/remates/324" para el remate 324)
+  const idInterno = parseInt(remate);
+
   const CATEGORIAS = [
     { id: 15, nombre: "Terneros" },
     { id: 3,  nombre: "Terneras" },
@@ -32,91 +35,77 @@ export default async function handler(req, res) {
   ];
 
   try {
-    // ── PASO 1: Descubrir el ID interno del remate ──────────────────────────
-    // Plaza Rural usa un ID interno distinto al número público de remate.
-    // Lo obtenemos scrapeando la página del remate y buscando la primera URL
-    // con el patrón /table-categoria/{idInterno}/{catId}
-    const urlRemate = `https://plazarural.com.uy/remates/${remate}?_token=${TOKEN}&escritorio_id=${ESCRITORIO_ID}`;
-    const htmlRemate = await fetch(urlRemate).then(r => r.text());
-
-    // Buscar patrón: table-categoria/NNNNN/XX o table-categoria/NN/XX
-    const matchId = htmlRemate.match(/table-categoria\/(\d+)\/\d+/);
-    if (!matchId) {
-      return res.status(404).json({
-        ok: false,
-        error: `No se encontró ID interno para el remate ${remate}. Puede que no tenga lotes inscriptos aún, o que el número de remate sea incorrecto.`
-      });
-    }
-    const idInterno = matchId[1];
-
-    // ── PASO 2: Buscar lotes en cada categoría ──────────────────────────────
     const lotes = [];
 
     for (const cat of CATEGORIAS) {
       const url = `https://plazarural.com.uy/table-categoria/${idInterno}/${cat.id}?escritorio_id=${ESCRITORIO_ID}&&&&&`;
       try {
         const html = await fetch(url).then(r => r.text());
-        // Extraer filas de lotes
-        const filaRegex = /<tr[^>]*data-id="(\d+)"[^>]*>([\s\S]*?)<\/tr>/gi;
+
+        // Si no hay filas de lotes, saltar esta categoría
+        if (!html.includes('<tr') || html.includes('No hay lotes')) continue;
+
+        // Extraer filas <tr> con datos
+        const filaRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
         let fila;
         while ((fila = filaRegex.exec(html)) !== null) {
-          const loteId = fila[1];
-          const contenido = fila[2];
+          const contenido = fila[1];
 
-          // Número de lote
-          const numMatch = contenido.match(/\/lotes\/(\d+)/);
-          const numero = numMatch ? numMatch[1] : loteId;
+          // Ignorar filas de encabezado (tienen <th>)
+          if (contenido.includes('<th')) continue;
 
-          // Descripción (primer td de texto)
-          const descMatch = contenido.match(/<td[^>]*>\s*<a[^>]*>([^<]+)<\/a>/);
-          const descripcion = descMatch ? descMatch[1].trim() : "";
+          // Extraer celdas <td>
+          const tds = [];
+          const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+          let tdMatch;
+          while ((tdMatch = tdRegex.exec(contenido)) !== null) {
+            // Limpiar HTML interno a texto plano
+            tds.push(tdMatch[1].replace(/<[^>]+>/g, '').trim());
+          }
+          if (tds.length < 2) continue;
 
-          // Cantidad
-          const cantMatch = contenido.match(/<td[^>]*class="[^"]*cantidad[^"]*"[^>]*>(\d+)<\/td>/i);
-          const cantidad = cantMatch ? parseInt(cantMatch[1]) : null;
+          // Extraer ID del lote desde el link
+          const idMatch = contenido.match(/\/lotes\/(\d+)|loteId=(\d+)|data-id="(\d+)"/);
+          const loteId = idMatch ? (idMatch[1] || idMatch[2] || idMatch[3]) : null;
 
-          // Departamento
-          const deptoMatch = contenido.match(/<td[^>]*class="[^"]*departamento[^"]*"[^>]*>([^<]+)<\/td>/i);
-          const departamento = deptoMatch ? deptoMatch[1].trim() : "";
+          // Extraer número visible del lote
+          const nroMatch = contenido.match(/class="[^"]*nro[^"]*"[^>]*>(\d+)<|>(\d+)<\/a>|Lote\s+(\d+)/i);
+          const nro = nroMatch ? (nroMatch[1] || nroMatch[2] || nroMatch[3]) : (tds[0] || loteId);
 
-          // Preoferta
-          const preoMatch = contenido.match(/class="[^"]*badge[^"]*"[^>]*>([^<]+)<\/span>/i);
-          const preoferta = preoMatch ? preoMatch[1].trim() : null;
+          // Extraer preoferta si existe
+          const preoMatch = contenido.match(/class="[^"]*badge[^"]*badge-(success|warning|danger)[^"]*"[^>]*>([^<]+)</i);
+          const preoferta = preoMatch ? preoMatch[2].trim() : null;
+          const preoColor = preoMatch ? (preoMatch[1] === 'success' ? '#28a745' : preoMatch[1] === 'warning' ? '#fd7e14' : '#dc3545') : null;
 
-          // Color de preoferta
-          let preoColor = null;
-          if (contenido.includes("badge-success") || contenido.includes("success")) preoColor = "green";
-          else if (contenido.includes("badge-warning") || contenido.includes("warning")) preoColor = "orange";
-
-          // Video URL
-          const videoMatch = contenido.match(/href="(https?:\/\/[^"]*(?:youtube|youtu\.be|vimeo)[^"]*)"/i);
+          // Extraer video
+          const videoMatch = contenido.match(/href="(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)[^"]+)"/i);
           const video = videoMatch ? videoMatch[1] : null;
 
           lotes.push({
-            id: loteId,
-            numero,
-            categoria: cat.nombre,
+            id:          loteId,
+            nro:         nro,
+            categoria:   cat.nombre,
             categoriaId: cat.id,
-            descripcion,
-            cantidad,
-            departamento,
+            cabezas:     tds[1] || null,
+            peso:        tds[2] || null,
+            clase:       tds[3] || null,
+            estado:      tds[4] || null,
+            departamento: tds[5] || null,
             preoferta,
-            preoColor,
+            preofertaColor: preoColor,
             video,
-            urlDetalle: `https://plazarural.com.uy/lotes/${numero}`,
           });
         }
       } catch (e) {
-        // Si falla una categoría, continuamos con las demás
         console.error(`Error categoría ${cat.nombre}:`, e.message);
       }
     }
 
     return res.json({
-      ok: true,
-      remate: parseInt(remate),
-      idInterno: parseInt(idInterno),
-      total: lotes.length,
+      ok:        true,
+      remate:    parseInt(remate),
+      idInterno: idInterno,
+      total:     lotes.length,
       lotes,
     });
 

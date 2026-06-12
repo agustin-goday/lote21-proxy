@@ -1,27 +1,17 @@
 // api/lotes-plaza-rural.js
-// Devuelve los lotes de Aramburu (escritorio_id=7) para un remate de Plaza Rural.
-// FIX: El ID interno de Plaza Rural ES el mismo número público del remate.
-//      La fórmula anterior (remate - 248) era incorrecta.
-
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   const remate = req.query.remate;
-  if (!remate) {
-    return res.status(400).json({ ok: false, error: "Falta parámetro remate" });
-  }
+  if (!remate) return res.status(400).json({ ok: false, error: "Falta parámetro remate" });
 
-  const ESCRITORIO_ID = 7; // Aramburu
-  const TOKEN = "dxAkpnxQnWSIWopkJYMpHAiHkT58qV1uxQYFy9RV";
+  const ESCRITORIO_ID = 7;
+  const idInterno = parseInt(remate) - 248;
 
-  // El ID interno de Plaza Rural es el mismo número público del remate
-  // (confirmado desde el HTML de portada: href="/remates/324" para el remate 324)
-const idInterno = parseInt(remate) - 248;
-  
   const CATEGORIAS = [
     { id: 15, nombre: "Terneros" },
     { id: 3,  nombre: "Terneras" },
-    { id: 6,  nombre: "Terneros/as" },
+    { id: 6,  nombre: "Terneros / Terneras" },
     { id: 14, nombre: "Novillos 1-2 años" },
     { id: 13, nombre: "Novillos 2-3 años" },
     { id: 7,  nombre: "Vacas de Invernada" },
@@ -41,73 +31,93 @@ const idInterno = parseInt(remate) - 248;
       const url = `https://plazarural.com.uy/table-categoria/${idInterno}/${cat.id}?escritorio_id=${ESCRITORIO_ID}&&&&&`;
       try {
         const html = await fetch(url).then(r => r.text());
+        if (!html.includes('<tbody>')) continue;
 
-        // Si no hay filas de lotes, saltar esta categoría
-        if (!html.includes('<tr') || html.includes('No hay lotes')) continue;
+        // Extraer filas del tbody
+        const tbodyMatch = html.match(/<tbody>([\s\S]*?)<\/tbody>/i);
+        if (!tbodyMatch) continue;
+        const tbody = tbodyMatch[1];
 
-        // Extraer filas <tr> con datos
-        const filaRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-        let fila;
-        while ((fila = filaRegex.exec(html)) !== null) {
-          const contenido = fila[1];
+        const filas = tbody.split(/<tr[^>]*>/).slice(1);
 
-          // Ignorar filas de encabezado (tienen <th>)
-          if (contenido.includes('<th')) continue;
+        for (const fila of filas) {
+          if (!fila.trim() || !fila.includes('<td')) continue;
 
-          // Extraer celdas <td>
+          // ID interno del lote (data-view-lote o loteId en URL)
+          const loteIdMatch = fila.match(/data-view-lote="(\d+)"|loteId=(\d+)/);
+          const loteId = loteIdMatch ? (loteIdMatch[1] || loteIdMatch[2]) : null;
+
+          // Extraer todas las celdas <td>
           const tds = [];
           const tdRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-          let tdMatch;
-          while ((tdMatch = tdRegex.exec(contenido)) !== null) {
-            // Limpiar HTML interno a texto plano
-            tds.push(tdMatch[1].replace(/<[^>]+>/g, '').trim());
+          let m;
+          while ((m = tdRegex.exec(fila)) !== null) {
+            // Limpiar HTML a texto plano
+            const texto = m[1]
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&amp;/g, '&')
+              .replace(/&nbsp;/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            tds.push(texto);
           }
-          if (tds.length < 2) continue;
 
-          // Extraer ID del lote desde el link
-          const idMatch = contenido.match(/\/lotes\/(\d+)|loteId=(\d+)|data-id="(\d+)"/);
-          const loteId = idMatch ? (idMatch[1] || idMatch[2] || idMatch[3]) : null;
+          // Estructura de columnas:
+          // 0: acciones (dropdown)
+          // 1: LOTE (número)
+          // 2: video/vacío
+          // 3: INSP.
+          // 4: CAB.
+          // 5: PESO
+          // 6: RAZA
+          // 7: DPTO.
+          // 8: ESCRITORIO
+          // 9: PREOFERTA
+          // 10: P. VENTA
+          // 11: FECHA
+          // 12: E. VENTA
 
-          // Extraer número visible del lote
-          const nroMatch = contenido.match(/class="[^"]*nro[^"]*"[^>]*>(\d+)<|>(\d+)<\/a>|Lote\s+(\d+)/i);
-          const nro = nroMatch ? (nroMatch[1] || nroMatch[2] || nroMatch[3]) : (tds[0] || loteId);
+          if (tds.length < 8) continue;
 
-          // Extraer preoferta si existe
-          const preoMatch = contenido.match(/class="[^"]*badge[^"]*badge-(success|warning|danger)[^"]*"[^>]*>([^<]+)</i);
+          const nro         = tds[1] || null;
+          const inspeccion  = tds[3] || null;
+          const cabezas     = tds[4] || null;
+          const peso        = tds[5] || null;
+          const raza        = tds[6] || null;
+          const departamento = tds[7] || null;
+
+          // Preoferta: buscar badge en columna 9
+          const preoMatch = fila.match(/badge-(success|warning|danger)[^>]*>([^<]+)</i);
           const preoferta = preoMatch ? preoMatch[2].trim() : null;
-          const preoColor = preoMatch ? (preoMatch[1] === 'success' ? '#28a745' : preoMatch[1] === 'warning' ? '#fd7e14' : '#dc3545') : null;
+          const preoColor = preoMatch
+            ? (preoMatch[1] === 'success' ? '#28a745' : preoMatch[1] === 'warning' ? '#fd7e14' : '#dc3545')
+            : null;
 
-          // Extraer video
-          const videoMatch = contenido.match(/href="(https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)[^"]+)"/i);
+          // Video: buscar URL de bunny CDN o youtube en la fila
+          const videoMatch = fila.match(/href="(https?:\/\/(?:vz-[^"]*\.b-cdn\.net|youtube\.com|youtu\.be)[^"]+)"/i);
           const video = videoMatch ? videoMatch[1] : null;
 
           lotes.push({
             id:          loteId,
             nro:         nro,
+            inspeccion:  inspeccion,
             categoria:   cat.nombre,
             categoriaId: cat.id,
-            cabezas:     tds[1] || null,
-            peso:        tds[2] || null,
-            clase:       tds[3] || null,
-            estado:      tds[4] || null,
-            departamento: tds[5] || null,
+            cabezas:     cabezas,
+            peso:        peso,
+            raza:        raza,
+            departamento: departamento,
             preoferta,
             preofertaColor: preoColor,
             video,
           });
         }
       } catch (e) {
-        console.error(`Error categoría ${cat.nombre}:`, e.message);
+        console.error(`Error cat ${cat.nombre}:`, e.message);
       }
     }
 
-    return res.json({
-      ok:        true,
-      remate:    parseInt(remate),
-      idInterno: idInterno,
-      total:     lotes.length,
-      lotes,
-    });
+    return res.json({ ok: true, remate: parseInt(remate), idInterno, total: lotes.length, lotes });
 
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });

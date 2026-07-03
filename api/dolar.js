@@ -1,14 +1,34 @@
 // api/dolar.js — USD via BROU portlet (estable) + otras via BCU SOAP
+// + ruta adicional: ?q=mundial  →  proxy openfootball/worldcup.json 2026
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=300");
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   if (req.method === "OPTIONS") return res.status(200).end();
+
+  // ── RUTA MUNDIAL: ?q=mundial ──────────────────────────────────────────────
+  if (req.query && req.query.q === "mundial") {
+    res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=3600");
+    try {
+      const r = await fetch(
+        "https://raw.githubusercontent.com/openfootball/worldcup.json/master/2026/worldcup.json",
+        { headers: { "User-Agent": "vco-mundial-2026/1.0", "Accept": "application/json" } }
+      );
+      if (!r.ok) return res.status(r.status).json({ error: "upstream error " + r.status });
+      const data = await r.json();
+      return res.status(200).json(data);
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  // ── RUTA DÓLAR (lógica original sin cambios) ──────────────────────────────
+  res.setHeader("Cache-Control", "s-maxage=1800, stale-while-revalidate=300");
 
   function fmt2(v) {
     const n = parseFloat(String(v || '').replace(',', '.'));
     return isNaN(n) ? null : n.toFixed(2);
   }
-
   const cotizaciones = { usd: null, eur: null, ars: null, brl: null };
   let ui = null, ur = null;
   const hoy = new Date();
@@ -34,7 +54,6 @@ export default async function handler(req, res) {
     const mm = String(hoy.getMonth()+1).padStart(2,'0');
     const yyyy = hoy.getFullYear();
     const soapBody = `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><Execute xmlns="http://cotizaciones.bcu.gub.uy/"><Entrada><Moneda><int>2227</int><int>500</int><int>2224</int><int>10001</int><int>10002</int></Moneda><FechaDesde>${yyyy}-${mm}-${dd}</FechaDesde><FechaHasta>${yyyy}-${mm}-${dd}</FechaHasta><Grupo>0</Grupo></Entrada></Execute></soap:Body></soap:Envelope>`;
-
     const soapRes = await fetch(
       "https://cotizaciones.bcu.gub.uy/wscotizaciones/servlet/awsbcucotizaciones",
       {
@@ -43,10 +62,8 @@ export default async function handler(req, res) {
         body: soapBody
       }
     );
-
     if (soapRes.ok) {
       const xml = await soapRes.text();
-      // Parsear cada moneda del XML
       const MONEDA_MAP = { '2227':'eur', '500':'ars', '2224':'brl' };
       const blocks = [...xml.matchAll(/<datoscotizaciones>([\s\S]*?)<\/datoscotizaciones>/gi)];
       blocks.forEach(b => {
@@ -59,7 +76,6 @@ export default async function handler(req, res) {
         if (key && tccM && tcvM) {
           cotizaciones[key] = { compra: fmt2(tccM[1]), venta: fmt2(tcvM[1]) };
         }
-        // UI (10001) y UR (10002)
         if (cod === '10001' && tcvM) ui = fmt2(tcvM[1]);
         if (cod === '10002' && tcvM) ur = fmt2(tcvM[1]);
       });
@@ -68,7 +84,6 @@ export default async function handler(req, res) {
 
   const usd = cotizaciones.usd || {};
   const fecha = hoy.toLocaleDateString('es-UY', { day: 'numeric', month: 'long' });
-
   return res.status(200).json({
     ok: true,
     fuente: "BCU/BROU",

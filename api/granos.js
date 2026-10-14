@@ -1,48 +1,99 @@
-// api/granos.js — DEBUG
+// api/granos.js — Precios de granos desde verdenews.com.uy/mercado-de-granos/
+// Mercado Internacional (Chicago) y Nacional Uruguay — actualizado diariamente
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=300");
   if (req.method === "OPTIONS") return res.status(200).end();
 
-  const debug = {};
-
-  // Test 1: allorigins + Revista Verde
   try {
-    const url = "https://api.allorigins.win/get?url=" + encodeURIComponent("https://revistaverde.com.uy/precio-mercado-nacional/");
-    const r = await fetch(url);
-    const data = await r.json();
-    debug.allorigins_status = r.status;
-    debug.allorigins_content_length = (data.contents || "").length;
-    debug.allorigins_preview = (data.contents || "").substring(0, 200);
-  } catch(e) {
-    debug.allorigins_error = e.message;
-  }
-
-  // Test 2: fetch directo a Revista Verde
-  try {
-    const r2 = await fetch("https://revistaverde.com.uy/precio-mercado-nacional/", {
-      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+    const r = await fetch("https://verdenews.com.uy/mercado-de-granos/", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "es-UY,es;q=0.9",
+        "Referer": "https://verdenews.com.uy/"
+      }
     });
-    debug.rv_direct_status = r2.status;
-    const text = await r2.text();
-    debug.rv_direct_length = text.length;
-    debug.rv_direct_preview = text.substring(0, 200);
-  } catch(e) {
-    debug.rv_direct_error = e.message;
-  }
 
-  // Test 3: fetch directo a BCR
-  try {
-    const r3 = await fetch("https://www.bcr.com.ar/es/mercados/granos/futuros-y-opciones/pizarra-futuros-del-cbot", {
-      headers: { "User-Agent": "Mozilla/5.0 Chrome/120.0.0.0" }
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const html = await r.text();
+    const texto = html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+
+    // ── Fecha de actualización ──
+    const fechaIntl = texto.match(/Mercado Internacional[^A-Z]*Actualizado el ([\d\/]+[^h]*hs)/i);
+    const fechaNac  = texto.match(/Mercado Nacional[^A-Z]*Actualizado el ([\d\/]+[^h]*hs)/i);
+    const fechaActualizacion = fechaIntl ? fechaIntl[1].trim() : null;
+
+    // ── Parsear tablas ──
+    // Formato en el texto limpio:
+    // "SOJA NOVIEMBRE 2026 JULIO 2027 473,91 488,42"
+    // "MAÍZ DICIEMBRE 2026 MARZO 2027 189,16 194,87"
+    // "TRIGO DICIEMBRE 2026 MARZO 2027 244,62 249,86"
+
+    function extraerGranoIntl(texto, grano) {
+      const re = new RegExp(
+        grano + '\\s+([A-ZÁÉÍÓÚ]+\\s+\\d{4})\\s+([A-ZÁÉÍÓÚ]+\\s+\\d{4})\\s+([\\d,\\.]+)\\s+([\\d,\\.]+)',
+        'i'
+      );
+      const m = texto.match(re);
+      if (!m) return [];
+      return [
+        { posicion: m[1].trim(), precio: m[3].replace(",", ".") },
+        { posicion: m[2].trim(), precio: m[4].replace(",", ".") },
+      ].filter(x => x.precio && x.precio !== "00000");
+    }
+
+    // ── Internacional ──
+    // Buscar bloque entre "Mercado Internacional" y "Mercado Nacional"
+    const idxIntl = texto.indexOf("Mercado Internacional");
+    const idxNac  = texto.indexOf("Mercado Nacional");
+    const bloqIntl = idxIntl > -1
+      ? texto.substring(idxIntl, idxNac > -1 ? idxNac : idxIntl + 1000)
+      : texto;
+
+    const soja  = extraerGranoIntl(bloqIntl, "SOJA");
+    const maiz  = extraerGranoIntl(bloqIntl, "MA[IÍ]Z");
+    const trigo = extraerGranoIntl(bloqIntl, "TRIGO");
+
+    // ── Nacional (Uruguay) ──
+    const bloqNac = idxNac > -1 ? texto.substring(idxNac, idxNac + 1500) : "";
+
+    function extraerGranoNac(bloque, keyword) {
+      // Busca patrones como "2026/2027 441,00" o "2025/2026 220,00"
+      const re = new RegExp(
+        keyword + '[\\s\\S]{0,200}?(\\d{4}\\/\\d{4})\\s+([\\d,\\.]+)',
+        'i'
+      );
+      const m = bloque.match(re);
+      if (!m || m[2] === "00000") return [];
+      return [{ posicion: m[1], precio: m[2].replace(",", ".") }];
+    }
+
+    const local = {
+      soja:   extraerGranoNac(bloqNac, "SOJA"),
+      trigo:  extraerGranoNac(bloqNac, "TRIGO"),
+      cebada: extraerGranoNac(bloqNac, "CEBADA"),
+    };
+
+    // Colza
+    const colzaM = bloqNac.match(/COLZA[\s\S]{0,100}?(\d{4}\/\d{4})\s+([\d,\.]+)/i);
+    if (colzaM && colzaM[2] !== "00000") {
+      local.colza = [{ posicion: colzaM[1], precio: colzaM[2].replace(",", ".") }];
+    }
+
+    return res.status(200).json({
+      ok: true,
+      fechaActualizacion,
+      fechaNacional: fechaNac ? fechaNac[1].trim() : null,
+      internacional: { soja, maiz, trigo },
+      local,
+      fuente: "Verdenews — Mercado de Granos Uruguay",
+      fuenteUrl: "https://verdenews.com.uy/mercado-de-granos/",
+      timestamp: new Date().toISOString(),
     });
-    debug.bcr_status = r3.status;
-    const text3 = await r3.text();
-    debug.bcr_length = text3.length;
-    debug.bcr_has_soja = text3.toLowerCase().includes("soja");
-  } catch(e) {
-    debug.bcr_error = e.message;
-  }
 
-  return res.status(200).json({ ok: true, debug });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
 }

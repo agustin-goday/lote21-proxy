@@ -1,5 +1,4 @@
 // api/granos.js — Precios de granos desde verdenews.com.uy/mercado-de-granos/
-// Mercado Internacional (Chicago) y Nacional Uruguay — actualizado diariamente
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -15,77 +14,66 @@ export default async function handler(req, res) {
         "Referer": "https://verdenews.com.uy/"
       }
     });
-
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const html = await r.text();
     const texto = html.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
 
-    // ── Fecha de actualización ──
-    const fechaIntl = texto.match(/Mercado Internacional[^A-Z]*Actualizado el ([\d\/]+[^h]*hs)/i);
-    const fechaNac  = texto.match(/Mercado Nacional[^A-Z]*Actualizado el ([\d\/]+[^h]*hs)/i);
-    const fechaActualizacion = fechaIntl ? fechaIntl[1].trim() : null;
+    // Fechas
+    const fechaIntl = texto.match(/Mercado Internacional[^A-Z0-9]*Actualizado el ([\d\/]+ [\d:]+ hs)/i);
+    const fechaNac  = texto.match(/Mercado Nacional[^A-Z0-9]*Actualizado el ([\d\/]+ [\d:]+ hs)/i);
 
-    // ── Parsear tablas ──
-    // Formato en el texto limpio:
-    // "SOJA NOVIEMBRE 2026 JULIO 2027 473,91 488,42"
-    // "MAÍZ DICIEMBRE 2026 MARZO 2027 189,16 194,87"
-    // "TRIGO DICIEMBRE 2026 MARZO 2027 244,62 249,86"
+    // Bloques
+    const idxIntl = texto.indexOf("Mercado Internacional");
+    const idxNac  = texto.indexOf("Mercado Nacional");
+    const bloqIntl = idxIntl > -1 ? texto.substring(idxIntl, idxNac > -1 ? idxNac : idxIntl + 800) : texto;
+    const bloqNac  = idxNac  > -1 ? texto.substring(idxNac,  idxNac + 1500) : "";
 
-    function extraerGranoIntl(texto, grano) {
+    // ── Internacional: "SOJA NOVIEMBRE 2026 JULIO 2027 473,91 488,42" ──
+    function extraerIntl(bloque, grano) {
       const re = new RegExp(
         grano + '\\s+([A-ZÁÉÍÓÚ]+\\s+\\d{4})\\s+([A-ZÁÉÍÓÚ]+\\s+\\d{4})\\s+([\\d,\\.]+)\\s+([\\d,\\.]+)',
         'i'
       );
-      const m = texto.match(re);
+      const m = bloque.match(re);
       if (!m) return [];
       return [
         { posicion: m[1].trim(), precio: m[3].replace(",", ".") },
         { posicion: m[2].trim(), precio: m[4].replace(",", ".") },
-      ].filter(x => x.precio && x.precio !== "00000");
+      ].filter(x => x.precio && !x.precio.startsWith("0000"));
     }
 
-    // ── Internacional ──
-    // Buscar bloque entre "Mercado Internacional" y "Mercado Nacional"
-    const idxIntl = texto.indexOf("Mercado Internacional");
-    const idxNac  = texto.indexOf("Mercado Nacional");
-    const bloqIntl = idxIntl > -1
-      ? texto.substring(idxIntl, idxNac > -1 ? idxNac : idxIntl + 1000)
-      : texto;
-
-    const soja  = extraerGranoIntl(bloqIntl, "SOJA");
-    const maiz  = extraerGranoIntl(bloqIntl, "MA[IÍ]Z");
-    const trigo = extraerGranoIntl(bloqIntl, "TRIGO");
-
-    // ── Nacional (Uruguay) ──
-    const bloqNac = idxNac > -1 ? texto.substring(idxNac, idxNac + 1500) : "";
-
-    function extraerGranoNac(bloque, keyword) {
-      // Busca patrones como "2026/2027 441,00" o "2025/2026 220,00"
-      const re = new RegExp(
-        keyword + '[\\s\\S]{0,200}?(\\d{4}\\/\\d{4})\\s+([\\d,\\.]+)',
-        'i'
-      );
-      const m = bloque.match(re);
-      if (!m || m[2] === "00000") return [];
-      return [{ posicion: m[1], precio: m[2].replace(",", ".") }];
+    // ── Nacional: buscar el primer precio con decimales reales ──
+    function extraerNac(bloque, keyword) {
+      const re = new RegExp(keyword + '[\\s\\S]{0,300}?(\\d{3,4}[,\\.]\\d{2})', 'i');
+      const matches = [...bloque.matchAll(new RegExp(keyword + '[\\s\\S]{0,400}?(\\d{3,4}[,\\.]\\d{2})', 'gi'))];
+      const validos = matches
+        .map(m => m[1].replace(",", "."))
+        .filter(p => !p.startsWith("000"));
+      if (!validos.length) return [];
+      // Buscar posición (año campaña) más cercana
+      const posM = bloque.match(new RegExp(keyword + '[\\s\\S]{0,200}?(\\d{4}\\/\\d{4})'));
+      const posicion = posM ? posM[1] : "2026/2027";
+      return [{ posicion, precio: validos[validos.length - 1] }];
     }
 
-    const local = {
-      soja:   extraerGranoNac(bloqNac, "SOJA"),
-      trigo:  extraerGranoNac(bloqNac, "TRIGO"),
-      cebada: extraerGranoNac(bloqNac, "CEBADA"),
-    };
+    const soja  = extraerIntl(bloqIntl, "SOJA");
+    const maiz  = extraerIntl(bloqIntl, "MA[IÍ]Z");
+    const trigo = extraerIntl(bloqIntl, "TRIGO");
 
-    // Colza
-    const colzaM = bloqNac.match(/COLZA[\s\S]{0,100}?(\d{4}\/\d{4})\s+([\d,\.]+)/i);
-    if (colzaM && colzaM[2] !== "00000") {
-      local.colza = [{ posicion: colzaM[1], precio: colzaM[2].replace(",", ".") }];
-    }
+    const local = {};
+    const sojaL  = extraerNac(bloqNac, "SOJA");
+    const trigoL = extraerNac(bloqNac, "TRIGO");
+    const cebadaL = extraerNac(bloqNac, "CEBADA");
+    const colzaL  = extraerNac(bloqNac, "COLZA");
+    if (sojaL.length)   local.soja   = sojaL;
+    if (trigoL.length)  local.trigo  = trigoL;
+    if (cebadaL.length) local.cebada = cebadaL;
+    if (colzaL.length)  local.colza  = colzaL;
 
     return res.status(200).json({
       ok: true,
-      fechaActualizacion,
-      fechaNacional: fechaNac ? fechaNac[1].trim() : null,
+      fechaActualizacion: fechaIntl ? fechaIntl[1].trim() : null,
+      fechaNacional:      fechaNac  ? fechaNac[1].trim()  : null,
       internacional: { soja, maiz, trigo },
       local,
       fuente: "Verdenews — Mercado de Granos Uruguay",
